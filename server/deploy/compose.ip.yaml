@@ -1,0 +1,70 @@
+services:
+  signaling:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    network_mode: host
+    env_file: secrets.env
+    volumes:
+      - ./runtime/friends:/data/friends
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 128m
+    pids_limit: 64
+    logging: {driver: none}
+  caddy:
+    image: caddy:2
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./runtime/challenges:/var/www/acme:ro
+      - ./runtime/acme:/certs:ro
+      - caddy_ip_data:/data
+      - caddy_ip_config:/config
+  certbot:
+    image: certbot/certbot:v5.9.0
+    profiles: [tools]
+    network_mode: host
+    # No Docker socket, owner token or TURN configuration is mounted here.
+    volumes:
+      - ./runtime:/var/lib/ohwhale
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 256m
+    pids_limit: 64
+  turn:
+    image: coturn/coturn:4.18.0-r0
+    network_mode: host
+    restart: unless-stopped
+    user: "0:0"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs:
+      - /tmp
+      - /var/lib/coturn
+      - /var/lib/turn
+      - /run/ohwhale-turn:rw,exec,nosuid,nodev,mode=0700,size=32m
+    # Upstream's ELF has CAP_NET_BIND_SERVICE=ep. With ALL capabilities
+    # dropped its exec may fail EPERM (126), despite listening above 1024.
+    # Copy only the public executable into private tmpfs without xattrs;
+    # do not relax the private configuration or add capabilities.
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        cp --no-preserve=xattr /usr/bin/turnserver /run/ohwhale-turn/turnserver
+        chmod 0755 /run/ohwhale-turn/turnserver
+        exec /run/ohwhale-turn/turnserver -c /etc/coturn/turnserver.conf
+    command: []
+    volumes:
+      - ./turnserver.conf:/etc/coturn/turnserver.conf:ro
+    mem_limit: 256m
+    pids_limit: 128
+    logging: {driver: none}
+volumes:
+  caddy_ip_data:
+  caddy_ip_config:

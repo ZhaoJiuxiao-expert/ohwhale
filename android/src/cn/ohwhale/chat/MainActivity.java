@@ -1,0 +1,285 @@
+package cn.ohwhale.chat;
+
+import android.Manifest;
+import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.database.Cursor;
+import android.graphics.BitmapFactory;
+import android.graphics.Bitmap;
+import android.net.Uri;
+import android.os.Bundle;
+import android.provider.OpenableColumns;
+import android.security.keystore.KeyGenParameterSpec;
+import android.security.keystore.KeyProperties;
+import android.speech.RecognizerIntent;
+import android.speech.SpeechRecognizer;
+import android.speech.tts.TextToSpeech;
+import android.speech.tts.UtteranceProgressListener;
+import android.util.Base64;
+import android.webkit.ConsoleMessage;
+import android.webkit.JavascriptInterface;
+import android.webkit.PermissionRequest;
+import android.webkit.ValueCallback;
+import android.webkit.WebChromeClient;
+import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
+import org.json.JSONArray;
+import org.json.JSONObject;
+import org.xmlpull.v1.XmlPullParser;
+import android.util.Xml;
+import android.util.AtomicFile;
+import java.io.*;
+import java.net.*;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.charset.StandardCharsets;
+import java.nio.charset.CodingErrorAction;
+import java.security.KeyStore;
+import java.security.MessageDigest;
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
+import java.util.zip.Inflater;
+import java.util.zip.InflaterInputStream;
+import java.util.zip.CRC32;
+import javax.crypto.Cipher;
+import javax.crypto.KeyGenerator;
+import javax.crypto.SecretKey;
+import javax.crypto.spec.GCMParameterSpec;
+
+/** A local-assets-only Android host. No application credentials are shipped. */
+public final class MainActivity extends Activity {
+  private static final String ORIGIN="https://appassets.androidplatform.net";
+  private static final String PAGE=ORIGIN+"/assets/www/index.html";
+  private static final String FRIENDS_ORIGIN="https://47.86.23.218";
+  private static final int MAX_FILE=32*1024*1024;
+  private final ExecutorService workers=Executors.newFixedThreadPool(4);
+  private final ExecutorService httpWorkers=Executors.newFixedThreadPool(4);
+  private final ScheduledExecutorService timer=Executors.newSingleThreadScheduledExecutor();
+  private final ConcurrentHashMap<String,HttpCall> calls=new ConcurrentHashMap<>();
+  private final ConcurrentHashMap<String,TtsCall> ttsCalls=new ConcurrentHashMap<>();
+  private WebView web;
+  private Vault vault;
+  private TextToSpeech tts;
+  private volatile boolean trustedPage=false,ttsReady=false;
+  private String pickerId,pickerMethod,exportId,exportText,recognizeId;
+  private PermissionRequest audioRequest;
+  private ValueCallback<Uri[]> imageChooser;
+  private String nativePermissionId,nativePermissionMethod;
+
+  @Override public void onCreate(Bundle state){
+    super.onCreate(state);
+    try{vault=new Vault();}catch(Exception e){new AlertDialog.Builder(this).setTitle("本机资料暂时打不开").setMessage("加密资料未能读取。请保留应用数据，稍后重试；应用不会重置你的聊天。").setPositiveButton("关闭",(d,w)->finish()).show();return;}
+    web=new WebView(this);setContentView(web);
+    WebSettings settings=web.getSettings();settings.setJavaScriptEnabled(true);settings.setDomStorageEnabled(true);settings.setDatabaseEnabled(false);settings.setCacheMode(WebSettings.LOAD_NO_CACHE);settings.setAllowFileAccess(false);settings.setAllowContentAccess(false);settings.setAllowFileAccessFromFileURLs(false);settings.setAllowUniversalAccessFromFileURLs(false);settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);settings.setJavaScriptCanOpenWindowsAutomatically(false);settings.setSupportMultipleWindows(false);settings.setMediaPlaybackRequiresUserGesture(true);settings.setSafeBrowsingEnabled(true);
+    WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG);
+    web.addJavascriptInterface(new Bridge(),"OhWhaleNative");
+    web.setWebViewClient(new WebViewClient(){
+      @Override public boolean shouldOverrideUrlLoading(WebView view,WebResourceRequest r){return !PAGE.equals(r.getUrl().toString());}
+      @Override public boolean shouldOverrideUrlLoading(WebView view,String url){return !PAGE.equals(url);}
+      @Override public void onPageStarted(WebView view,String url,android.graphics.Bitmap icon){trustedPage=PAGE.equals(url);}
+      @Override public WebResourceResponse shouldInterceptRequest(WebView view,WebResourceRequest request){Uri uri=request.getUrl();if(!"appassets.androidplatform.net".equals(uri.getHost())&&"https".equals(uri.getScheme())&&trustedPage&&!request.isForMainFrame())return null;return resource(uri,request.getMethod());}
+      @Override public void onReceivedSslError(WebView view,android.webkit.SslErrorHandler handler,android.net.http.SslError error){handler.cancel();}
+    });
+    web.setWebChromeClient(new WebChromeClient(){
+      @Override public void onPermissionRequest(PermissionRequest request){runOnUiThread(()->{
+        if(!trustedPage||!PAGE.equals(web.getUrl())||!ORIGIN.equals(request.getOrigin().toString().replaceAll("/$",""))){request.deny();return;}
+        List<String> permissions=new ArrayList<>();boolean valid=request.getResources().length>0;
+        for(String resource:request.getResources()){String permission=PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(resource)?Manifest.permission.RECORD_AUDIO:PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(resource)?Manifest.permission.CAMERA:null;if(permission==null){valid=false;break;}if(checkSelfPermission(permission)!=PackageManager.PERMISSION_GRANTED&&!permissions.contains(permission))permissions.add(permission);}
+        if(!valid||audioRequest!=null){request.deny();return;}if(permissions.isEmpty())request.grant(request.getResources());
+        else{audioRequest=request;requestPermissions(permissions.toArray(new String[0]),51);}
+      });}
+      @Override public void onPermissionRequestCanceled(PermissionRequest request){if(audioRequest==request)audioRequest=null;}
+      @Override public boolean onShowFileChooser(WebView view,ValueCallback<Uri[]> callback,FileChooserParams params){
+        if(!trustedPage||!PAGE.equals(view.getUrl())||params.getMode()!=FileChooserParams.MODE_OPEN){callback.onReceiveValue(null);return true;}
+        String[] accepts=params.getAcceptTypes();boolean valid=accepts.length>0;for(String accept:accepts)if(!Arrays.asList("image/*","image/png","image/jpeg","image/webp","image/gif","image/bmp").contains(accept))valid=false;
+        if(!valid||imageChooser!=null){callback.onReceiveValue(null);return true;}imageChooser=callback;try{startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("image/*"),105);}catch(Exception e){imageChooser=null;callback.onReceiveValue(null);}return true;
+      }
+      @Override public boolean onConsoleMessage(ConsoleMessage message){if(BuildConfig.DEBUG)android.util.Log.d("OhWhaleWeb",message.messageLevel()+" line "+message.lineNumber());return true;}
+    });
+    tts=new TextToSpeech(this,status->{ttsReady=status==TextToSpeech.SUCCESS&&tts!=null&&tts.setLanguage(Locale.SIMPLIFIED_CHINESE)>=TextToSpeech.LANG_AVAILABLE;});
+    tts.setOnUtteranceProgressListener(new UtteranceProgressListener(){public void onStart(String id){}public void onDone(String id){TtsCall call=ttsCalls.remove(id);if(call!=null)workers.execute(()->{try{byte[] data=read(new FileInputStream(call.file),20*1024*1024);JSONObject descriptor=vault.putMedia(data,"audio",call.name,"audio/wav");reply(call.rpcId,true,new JSONObject().put("attachment",descriptor),null);}catch(Exception e){reply(call.rpcId,false,null,friendly(e));}finally{clearTts(call.file);}});}public void onError(String id){TtsCall call=ttsCalls.remove(id);if(call!=null){clearTts(call.file);reply(call.rpcId,false,null,"这次系统朗读没有生成音频，请换一种系统声音后重试。");}}});
+    web.loadUrl(PAGE);
+  }
+
+  private WebResourceResponse resource(Uri uri,String method){
+    try{
+      if(!"GET".equals(method))return denied();
+      if("lingyu-media".equals(uri.getScheme())&&"asset".equals(uri.getHost())){JSONObject m=vault.media(uri.getLastPathSegment());return response(m.getString("mime"),vault.mediaBytes(uri.getLastPathSegment()));}
+      if(!"https".equals(uri.getScheme())||!"appassets.androidplatform.net".equals(uri.getHost())||uri.getQuery()!=null||uri.getFragment()!=null)return denied();
+      String p=uri.getPath();if(p==null||!p.startsWith("/assets/www/")||p.contains("..")||p.contains("\\"))return denied();
+      String asset=p.substring("/assets/".length());byte[] b=read(getAssets().open(asset),40*1024*1024);return response(mime(asset),b);
+    }catch(Exception e){return denied();}
+  }
+  private WebResourceResponse response(String mime,byte[] bytes){Map<String,String> h=new HashMap<>();h.put("X-Content-Type-Options","nosniff");h.put("Access-Control-Allow-Origin",ORIGIN);h.put("Cache-Control","no-store");h.put("Content-Security-Policy","default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: lingyu-media:; media-src 'self' data: blob: lingyu-media:; connect-src 'self' https: http://127.0.0.1:* http://localhost:*; frame-src 'none'; child-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'");return new WebResourceResponse(mime,"utf-8",200,"OK",h,new ByteArrayInputStream(bytes));}
+  private WebResourceResponse denied(){return new WebResourceResponse("text/plain","utf-8",403,"Forbidden",Collections.emptyMap(),new ByteArrayInputStream(new byte[0]));}
+  private String mime(String file){String f=file.toLowerCase(Locale.ROOT);if(f.endsWith(".js"))return "text/javascript";if(f.endsWith(".css"))return "text/css";if(f.endsWith(".html"))return "text/html";if(f.endsWith(".json"))return "application/json";if(f.endsWith(".svg"))return "image/svg+xml";if(f.endsWith(".png"))return "image/png";if(f.endsWith(".jpg")||f.endsWith(".jpeg"))return "image/jpeg";if(f.endsWith(".webp"))return "image/webp";if(f.endsWith(".gif"))return "image/gif";if(f.endsWith(".woff2"))return "font/woff2";if(f.endsWith(".woff"))return "font/woff";return "application/octet-stream";}
+  private void emit(JSONObject event){runOnUiThread(()->{if(web!=null&&trustedPage)web.evaluateJavascript("window.__ohwhaleNativeEvent&&window.__ohwhaleNativeEvent("+JSONObject.quote(event.toString())+")",null);});}
+  private void reply(String id,boolean ok,Object value,String message){try{emit(new JSONObject().put("type","rpc").put("id",id).put("ok",ok).put("value",value==null?JSONObject.NULL:value).put("error",message==null?JSONObject.NULL:message));}catch(Exception ignored){}}
+  private JSONObject ok(Object value)throws Exception{return new JSONObject().put("ok",true).put("value",value==null?JSONObject.NULL:value);}
+  private String friendly(Exception e){String message=e.getMessage();if(message!=null&&(message.startsWith("请")||message.startsWith("这")||message.startsWith("本机")||message.startsWith("图片")||message.startsWith("文件")||message.startsWith("录音")||message.startsWith("模型")||message.startsWith("接口")||message.startsWith("资料")||message.startsWith("版本")))return message;return "这次本机操作没有完成，请检查文件、网络或设备权限后重试。";}
+  private JSONObject capabilities()throws Exception{return new JSONObject().put("fileImport",true).put("fileExport",true).put("tts",ttsReady).put("ttsReason",ttsReady?"":"中文系统语音尚未安装或未就绪").put("microphone",getPackageManager().hasSystemFeature(PackageManager.FEATURE_MICROPHONE)).put("transcribe",false).put("nativeRecognize",SpeechRecognizer.isRecognitionAvailable(this)).put("saveRecording",true).put("localApi",false).put("studio",true).put("p2p",true);}
+  private String required(JSONObject input,String key,int max)throws Exception{Object v=input.opt(key);if(!(v instanceof String)||((String)v).length()>max||((String)v).contains("\0"))throw new Exception("请检查输入内容和长度。");return (String)v;}
+  private String identifier(String value)throws Exception{if(value==null||!value.matches("[a-zA-Z0-9][a-zA-Z0-9_-]{0,99}"))throw new Exception("请重新选择有效的本机条目。");return value;}
+  private byte[] base64(String value,int max)throws Exception{if(value==null||value.length()>max*4/3+8||!value.matches("[A-Za-z0-9+/]*={0,2}"))throw new Exception("文件编码不完整，请重新选择。");byte[] result=Base64.decode(value,Base64.NO_WRAP);if(result.length>max||!Base64.encodeToString(result,Base64.NO_WRAP).equals(value))throw new Exception("文件编码不完整，请重新选择。");return result;}
+  private static byte[] read(InputStream source,int max)throws IOException{try(InputStream in=source;ByteArrayOutputStream out=new ByteArrayOutputStream()){byte[] buffer=new byte[65536];int n;while((n=in.read(buffer))!=-1){if(out.size()+n>max)throw new IOException("文件超过本机处理上限，请选择较小文件。");out.write(buffer,0,n);}return out.toByteArray();}}
+  private String endpoint(String value)throws Exception{if(value==null||value.length()>2048||value.contains("?")||value.contains("#"))throw new Exception("接口地址只支持 HTTPS 或本机 HTTP。");URI u=new URI(value);String host=u.getHost();boolean local=Arrays.asList("localhost","127.0.0.1","[::1]","::1").contains(host);if(host==null||u.getRawAuthority().contains("@")||u.getUserInfo()!=null||!("https".equals(u.getScheme())||"http".equals(u.getScheme())&&local))throw new Exception("接口地址只支持 HTTPS 或本机 HTTP，且不能含账号或查询参数。");return u.normalize().toString().replaceAll("/+$","");}
+
+  private final class Bridge {
+    @JavascriptInterface public String sync(String method,String raw){
+      try{if(!trustedPage||raw==null||raw.length()>48*1024*1024)throw new Exception("本机桥仅允许内置页面使用。");JSONObject a=new JSONObject(raw);Object value;
+        switch(method){
+          case "fsStat":value=vault.stat(required(a,"path",512));break;
+          case "fsList":value=vault.list(required(a,"path",512));break;
+          case "fsMkdir":vault.mkdir(required(a,"path",512));value=true;break;
+          case "fsRead":value=new JSONObject().put("dataBase64",Base64.encodeToString(vault.readVirtual(required(a,"path",512)),Base64.NO_WRAP));break;
+          case "fsWrite":vault.writeVirtual(required(a,"path",512),base64(required(a,"dataBase64",48*1024*1024),MAX_FILE),a.optBoolean("exclusive"));value=true;break;
+          case "sha256":value=hex(MessageDigest.getInstance("SHA-256").digest(base64(required(a,"dataBase64",48*1024*1024),MAX_FILE)));break;
+          case "secretPut":value=vault.putSecret(required(a,"value",10000),endpoint(required(a,"endpoint",2048)));break;
+          case "friendsSecretPut":{String origin=required(a,"endpoint",2048);if(!FRIENDS_ORIGIN.equals(origin))throw new Exception("好友凭据只保存在当前联机服务下。");value=vault.putFriendSecret(required(a,"value",128),origin);break;}
+          case "mediaData":value=vault.fromData(a);break;
+          case "mediaRead":{String id=identifier(required(a,"id",100));JSONObject m=vault.media(id);value=new JSONObject().put("dataUrl","data:"+m.getString("mime")+";base64,"+Base64.encodeToString(vault.mediaBytes(id),Base64.NO_WRAP)).put("name",m.getString("name")).put("type",m.getString("type"));break;}
+          case "mediaMeta":value=vault.media(identifier(required(a,"id",100)));break;
+          default:throw new Exception("本机方法未开放。");
+        }
+        return ok(value).toString();
+      }catch(Exception e){try{return new JSONObject().put("ok",false).put("error",friendly(e)).put("code",e instanceof FileNotFoundException?"ENOENT":e instanceof java.nio.file.FileAlreadyExistsException?"EEXIST":"ANDROID_NATIVE").toString();}catch(Exception ignored){return "{\"ok\":false}";}}
+    }
+    @JavascriptInterface public void postMessage(String raw){
+      if(!trustedPage||raw==null||raw.length()>48*1024*1024)return;
+      workers.execute(()->{String id="";try{JSONObject message=new JSONObject(raw);id=required(message,"id",100);String method=required(message,"method",80);JSONObject input=message.optJSONObject("input");if(input==null)input=new JSONObject();dispatch(id,method,input);}catch(Exception e){if(!id.isEmpty())reply(id,false,null,friendly(e));}});
+    }
+  }
+  private void dispatch(String id,String method,JSONObject a)throws Exception{
+    switch(method){
+      case "capabilities":reply(id,true,capabilities(),null);break;
+      case "httpStart":{String requestId=identifier(required(a,"requestId",100));HttpCall call=new HttpCall();synchronized(calls){if(calls.size()>=8)throw new Exception("请先等待正在生成的回复完成。");if(calls.putIfAbsent(requestId,call)!=null)throw new Exception("这条请求已经开始。");}reply(id,true,true,null);httpWorkers.execute(()->http(requestId,a,call));break;}
+      case "friendsHttpStart":{String requestId=identifier(required(a,"requestId",100));HttpCall call=new HttpCall();synchronized(calls){if(calls.size()>=8)throw new Exception("请稍等，正在连接伙伴。");if(calls.putIfAbsent(requestId,call)!=null)throw new Exception("这份好友请求已经开始。");}reply(id,true,true,null);httpWorkers.execute(()->friendsHttp(requestId,a,call));break;}
+      case "managedHttpStart":{String requestId=identifier(required(a,"requestId",100));HttpCall call=new HttpCall();synchronized(calls){if(calls.size()>=8)throw new Exception("请稍等，伙伴们正在回复。");if(calls.putIfAbsent(requestId,call)!=null)throw new Exception("这份托管请求已经开始。");}reply(id,true,true,null);httpWorkers.execute(()->managedHttp(requestId,a,call));break;}
+      case "httpCancel":{HttpCall c=calls.get(required(a,"requestId",100));if(c!=null){c.cancelled.set(true);if(c.connection!=null)c.connection.disconnect();}reply(id,true,true,null);break;}
+      case "pickImage":openPicker(id,"image");break;
+      case "pickJson":openPicker(id,"json");break;
+      case "pickNovel":openPicker(id,"novel");break;
+      case "exportJson":{String contents=required(a,"text",MAX_FILE);new JSONObject(contents);String name=required(a,"name",180).replaceAll("[\\\\/:*?\"<>|]","_");runOnUiThread(()->{if(exportId!=null){reply(id,false,null,"请先完成上一次文件保存。");return;}exportId=id;exportText=contents;Intent intent=new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("application/json").putExtra(Intent.EXTRA_TITLE,name);startActivityForResult(intent,103);});break;}
+      case "copyText":{String contents=required(a,"text",200000);runOnUiThread(()->{((ClipboardManager)getSystemService(CLIPBOARD_SERVICE)).setPrimaryClip(ClipData.newPlainText("哦鲸鲸",contents));reply(id,true,true,null);});break;}
+      case "pasteImage":runOnUiThread(()->{try{ClipboardManager c=(ClipboardManager)getSystemService(CLIPBOARD_SERVICE);ClipData clip=c.getPrimaryClip();Uri uri=clip!=null&&clip.getItemCount()>0?clip.getItemAt(0).getUri():null;if(uri==null||!"content".equals(uri.getScheme())){reply(id,true,JSONObject.NULL,null);return;}workers.execute(()->{try{reply(id,true,vault.putMedia(read(getContentResolver().openInputStream(uri),10*1024*1024),"image","粘贴的图片",""),null);}catch(Exception e){reply(id,false,null,"剪贴板图片暂时读不到，请用图片按钮重新选择。");}});}catch(Exception e){reply(id,true,JSONObject.NULL,null);}});break;
+      case "saveRecording":{byte[] wav=base64(required(a,"wavBase64",3000000),2300000);validateWav(wav,true);reply(id,true,new JSONObject().put("attachment",vault.putMedia(wav,"audio","我的声音.wav","audio/wav")),null);break;}
+      case "speak":speak(id,a);break;
+      case "stopSpeech":{String speechId=a.optString("speechId","");runOnUiThread(()->{if(speechId.isEmpty()||ttsCalls.containsKey(speechId)){if(tts!=null)tts.stop();for(Map.Entry<String,TtsCall> item:ttsCalls.entrySet())if(speechId.isEmpty()||speechId.equals(item.getKey())){TtsCall call=ttsCalls.remove(item.getKey());if(call!=null){clearTts(call.file);reply(call.rpcId,false,null,"这句先不念啦。");}}}reply(id,true,true,null);});break;}
+      case "nativeRecognize":runOnUiThread(()->{nativePermissionId=id;nativePermissionMethod="recognize";if(checkSelfPermission(Manifest.permission.RECORD_AUDIO)!=PackageManager.PERMISSION_GRANTED)requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO},52);else recognize(id);});break;
+      case "finish":runOnUiThread(()->{reply(id,true,true,null);finish();});break;
+      default:throw new Exception("这个 Android 本机能力暂未提供。");
+    }
+  }
+  private void http(String requestId,JSONObject a,HttpCall call){ScheduledFuture<?> deadline=timer.schedule(()->{call.timedOut=true;call.cancelled.set(true);if(call.connection!=null)call.connection.disconnect();},90,TimeUnit.SECONDS);try{
+    if(call.cancelled.get())throw new IOException("cancelled");String url=endpoint(required(a,"url",2048));if(!"POST".equals(a.optString("method"))||!new URI(url).getPath().endsWith("/chat/completions"))throw new Exception("模型请求只支持聊天 POST。");String body=required(a,"body",MAX_FILE);JSONObject payload=new JSONObject(body);if(payload.has("tools")||payload.optJSONArray("messages")==null||payload.getJSONArray("messages").length()>28)throw new Exception("模型请求结构不符合聊天范围。");
+    HttpURLConnection c=(HttpURLConnection)new URL(url).openConnection();call.connection=c;c.setInstanceFollowRedirects(false);c.setConnectTimeout(15000);c.setReadTimeout(90000);c.setRequestMethod("POST");c.setDoOutput(true);c.setRequestProperty("Content-Type","application/json");c.setRequestProperty("Accept","text/event-stream, application/json");JSONObject headers=a.optJSONObject("headers");String auth=headers==null?"":headers.optString("Authorization","");if(!auth.isEmpty()){if(!auth.startsWith("Bearer @android-key:"))throw new Exception("模型凭据需要在 Android 设置中重新保存。");String key=vault.secret(auth.substring("Bearer @android-key:".length()),url);c.setRequestProperty("Authorization","Bearer "+key);}
+    if(call.cancelled.get())throw new IOException("cancelled");byte[] data=body.getBytes(StandardCharsets.UTF_8);c.setFixedLengthStreamingMode(data.length);try(OutputStream out=c.getOutputStream()){if(call.cancelled.get())throw new IOException("cancelled");out.write(data);}int status=c.getResponseCode();if(call.cancelled.get())throw new IOException("cancelled");JSONObject h=new JSONObject().put("content-type",c.getContentType()==null?"application/json":c.getContentType());emit(new JSONObject().put("type","httpHeaders").put("requestId",requestId).put("status",status).put("headers",h));if(status>=300&&status<400)throw new Exception("模型接口发生重定向，请核对服务地址后重试。");InputStream in=status>=400?c.getErrorStream():c.getInputStream();int total=0;if(in!=null)try(InputStream source=in){byte[] b=new byte[4096];int n;while((n=source.read(b))!=-1){if(call.cancelled.get())throw new IOException("cancelled");if((total+=n)>4*1024*1024)throw new Exception("模型回复超过长度限制，请缩短问题后重试。");emit(new JSONObject().put("type","httpChunk").put("requestId",requestId).put("dataBase64",Base64.encodeToString(Arrays.copyOf(b,n),Base64.NO_WRAP)));}}if(call.cancelled.get())throw new IOException("cancelled");emit(new JSONObject().put("type","httpEnd").put("requestId",requestId));
+  }catch(Exception e){try{emit(new JSONObject().put("type","httpError").put("requestId",requestId).put("error",call.timedOut?"这次等待超过90秒，请稍后重试。":call.cancelled.get()?"这条回复已取消。":friendly(e)));}catch(Exception ignored){}}finally{deadline.cancel(false);calls.remove(requestId);if(call.connection!=null)call.connection.disconnect();}}
+  private String friendsRoute(String value,String method)throws Exception{
+    String url=endpoint(value),prefix=FRIENDS_ORIGIN+"/v1/friends/";if(!url.startsWith(prefix))throw new Exception("好友连接只能使用内置联机服务。");String route=url.substring(prefix.length());
+    if(!Arrays.asList("register","state","request","respond","block","call","respond-call","session","end-call").contains(route)||!("state".equals(route)?"GET":"POST").equals(method))throw new Exception("好友连接的操作范围不正确。");return route;
+  }
+  private String managedRoute(String value,String method)throws Exception{
+    String url=endpoint(value),prefix=FRIENDS_ORIGIN+"/v1/managed/";if(!url.startsWith(prefix))throw new Exception("托管聊天只能使用内置联机服务。");String route=url.substring(prefix.length());
+    if(!Arrays.asList("models","usage","chat/completions").contains(route)||!("chat/completions".equals(route)?"POST":"GET").equals(method))throw new Exception("托管连接的操作范围不正确。");return route;
+  }
+  private void managedHttp(String requestId,JSONObject a,HttpCall call){ScheduledFuture<?> deadline=timer.schedule(()->{call.timedOut=true;call.cancelled.set(true);if(call.connection!=null)call.connection.disconnect();},80,TimeUnit.SECONDS);try{
+    if(call.cancelled.get())throw new IOException("cancelled");String url=required(a,"url",2048),method=required(a,"method",8),route=managedRoute(url,method),body=required(a,"body",8*1024*1024);if("GET".equals(method)){if(!body.isEmpty())throw new Exception("托管查询不接收正文。");}else{JSONObject payload=new JSONObject(body);for(Iterator<String> it=payload.keys();it.hasNext();)if(!Arrays.asList("model","messages","stream","max_tokens").contains(it.next()))throw new Exception("托管请求包含未支持的内容。");if(payload.optJSONArray("messages")==null||payload.getJSONArray("messages").length()>25)throw new Exception("托管上下文太长，请新建聊天。");}
+    HttpURLConnection c=(HttpURLConnection)new URL(url).openConnection();call.connection=c;c.setInstanceFollowRedirects(false);c.setConnectTimeout(10000);c.setReadTimeout(75000);c.setRequestMethod(method);c.setRequestProperty("Accept","application/json");JSONObject headers=a.optJSONObject("headers");String auth=headers==null?"":headers.optString("Authorization","");if("models".equals(route)){if(!auth.isEmpty())throw new Exception("公开模型目录不接收凭据。");}else{String marker="Bearer @android-friend:";if(!auth.startsWith(marker))throw new Exception("本机托管身份格式不完整。");c.setRequestProperty("Authorization","Bearer "+vault.managedSecret(auth.substring(marker.length()),url,method));}
+    if("POST".equals(method)){c.setDoOutput(true);c.setRequestProperty("Content-Type","application/json");byte[] data=body.getBytes(StandardCharsets.UTF_8);if(data.length>8*1024*1024)throw new Exception("这次图片和文字有点多，请缩小后再试。");c.setFixedLengthStreamingMode(data.length);try(OutputStream out=c.getOutputStream()){if(call.cancelled.get())throw new IOException("cancelled");out.write(data);}}
+    int status=c.getResponseCode();if(call.cancelled.get())throw new IOException("cancelled");if(status>=300&&status<400)throw new Exception("托管服务发生跳转，连接已停止。");emit(new JSONObject().put("type","httpHeaders").put("requestId",requestId).put("status",status).put("headers",new JSONObject().put("content-type","application/json")));InputStream in=status>=400?c.getErrorStream():c.getInputStream();if(in!=null){byte[] bytes=read(in,4*1024*1024);if(call.cancelled.get())throw new IOException("cancelled");for(int at=0;at<bytes.length;at+=4096)emit(new JSONObject().put("type","httpChunk").put("requestId",requestId).put("dataBase64",Base64.encodeToString(Arrays.copyOfRange(bytes,at,Math.min(at+4096,bytes.length)),Base64.NO_WRAP)));}emit(new JSONObject().put("type","httpEnd").put("requestId",requestId));
+  }catch(Exception e){try{emit(new JSONObject().put("type","httpError").put("requestId",requestId).put("error","托管伙伴暂时没回应，请检查网络后手动重试。"));}catch(Exception ignored){}}finally{deadline.cancel(false);calls.remove(requestId);if(call.connection!=null)call.connection.disconnect();}}
+  private void friendsHttp(String requestId,JSONObject a,HttpCall call){ScheduledFuture<?> deadline=timer.schedule(()->{call.timedOut=true;call.cancelled.set(true);if(call.connection!=null)call.connection.disconnect();},12,TimeUnit.SECONDS);try{
+    if(call.cancelled.get())throw new IOException("cancelled");String url=required(a,"url",2048),method=required(a,"method",8),route=friendsRoute(url,method),body=required(a,"body",4096);if("GET".equals(method)){if(!body.isEmpty())throw new Exception("好友查询不接收正文。");}else{JSONObject payload=new JSONObject(body);List<String> keys="register".equals(route)?Arrays.asList("name"):"request".equals(route)?Arrays.asList("code"):"respond".equals(route)?Arrays.asList("requestId","accept"):"block".equals(route)||"call".equals(route)?Arrays.asList("friendId"):"respond-call".equals(route)?Arrays.asList("callId","accept"):Arrays.asList("callId");for(Iterator<String> it=payload.keys();it.hasNext();)if(!keys.contains(it.next()))throw new Exception("好友请求包含未支持的内容。");}
+    HttpURLConnection c=(HttpURLConnection)new URL(url).openConnection();call.connection=c;c.setInstanceFollowRedirects(false);c.setConnectTimeout(8000);c.setReadTimeout(10000);c.setRequestMethod(method);c.setRequestProperty("Accept","application/json");JSONObject headers=a.optJSONObject("headers");String auth=headers==null?"":headers.optString("Authorization","");if("register".equals(route)){if(!auth.isEmpty())throw new Exception("好友注册不接收已有凭据。");}else{String marker="Bearer @android-friend:";if(!auth.startsWith(marker))throw new Exception("本机好友凭据格式不完整。");c.setRequestProperty("Authorization","Bearer "+vault.friendSecret(auth.substring(marker.length()),url,method));}
+    if("POST".equals(method)){c.setDoOutput(true);c.setRequestProperty("Content-Type","application/json");byte[] data=body.getBytes(StandardCharsets.UTF_8);c.setFixedLengthStreamingMode(data.length);try(OutputStream out=c.getOutputStream()){if(call.cancelled.get())throw new IOException("cancelled");out.write(data);}}
+    int status=c.getResponseCode();if(call.cancelled.get())throw new IOException("cancelled");if(status>=300&&status<400)throw new Exception("好友服务发生跳转，连接已停止。");emit(new JSONObject().put("type","httpHeaders").put("requestId",requestId).put("status",status).put("headers",new JSONObject().put("content-type","application/json")));InputStream in=status>=400?c.getErrorStream():c.getInputStream();if(in!=null){byte[] bytes=read(in,512*1024);if(call.cancelled.get())throw new IOException("cancelled");for(int at=0;at<bytes.length;at+=4096)emit(new JSONObject().put("type","httpChunk").put("requestId",requestId).put("dataBase64",Base64.encodeToString(Arrays.copyOfRange(bytes,at,Math.min(at+4096,bytes.length)),Base64.NO_WRAP)));}emit(new JSONObject().put("type","httpEnd").put("requestId",requestId));
+  }catch(Exception e){try{emit(new JSONObject().put("type","httpError").put("requestId",requestId).put("error","好友服务暂时连接不上，请检查网络后重试。"));}catch(Exception ignored){}}finally{deadline.cancel(false);calls.remove(requestId);if(call.connection!=null)call.connection.disconnect();}}
+  private void openPicker(String id,String kind){runOnUiThread(()->{if(pickerId!=null){reply(id,false,null,"请先完成上一次文件选择。");return;}pickerId=id;pickerMethod=kind;Intent i=new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("image".equals(kind)?"image/*":"json".equals(kind)?"application/json":"*/*");if("novel".equals(kind))i.putExtra(Intent.EXTRA_MIME_TYPES,new String[]{"text/plain","text/markdown","application/vnd.openxmlformats-officedocument.wordprocessingml.document"});try{startActivityForResult(i,101);}catch(Exception e){pickerId=null;reply(id,false,null,"这台设备暂时没有文件选择器。");}});}
+  private String uriName(Uri uri){String name="导入文件";try(Cursor c=getContentResolver().query(uri,new String[]{OpenableColumns.DISPLAY_NAME},null,null,null)){if(c!=null&&c.moveToFirst()&&c.getString(0)!=null)name=c.getString(0);}catch(Exception ignored){}name=name.replaceAll("[\\x00-\\x1f\\x7f/\\\\]","_");return name.length()>180?name.substring(0,180):name;}
+  @Override protected void onActivityResult(int request,int result,Intent intent){super.onActivityResult(request,result,intent);
+    if(request==105){ValueCallback<Uri[]> callback=imageChooser;imageChooser=null;if(callback==null)return;Uri uri=result==RESULT_OK&&intent!=null?intent.getData():null;if(uri==null||!"content".equals(uri.getScheme())||!trustedPage||!PAGE.equals(web.getUrl())){callback.onReceiveValue(null);return;}callback.onReceiveValue(new Uri[]{uri});return;}
+    if(request==101){String id=pickerId,kind=pickerMethod;pickerId=null;pickerMethod=null;if(id==null)return;if(result!=RESULT_OK||intent==null||intent.getData()==null){reply(id,true,JSONObject.NULL,null);return;}Uri uri=intent.getData();if(!"content".equals(uri.getScheme())){reply(id,false,null,"请通过系统文件选择器选取文件。");return;}workers.execute(()->{try{String name=uriName(uri);byte[] bytes=read(getContentResolver().openInputStream(uri),"image".equals(kind)?10*1024*1024:MAX_FILE);if("image".equals(kind))reply(id,true,vault.putMedia(bytes,"image",name,""),null);else if("json".equals(kind)){String text=decodeText(bytes);new JSONObject(text);reply(id,true,new JSONObject().put("text",text).put("name",name),null);}else{String text=novelText(name,bytes);String archive=vault.archiveOriginal(name,bytes);reply(id,true,new JSONObject().put("text",text).put("name",name).put("source","Android文件选择："+name).put("originalArchive",archive),null);}}catch(Exception e){reply(id,false,null,friendly(e));}});}
+    if(request==103){String id=exportId,data=exportText;exportId=null;exportText=null;if(id==null)return;if(result!=RESULT_OK||intent==null||intent.getData()==null){reply(id,true,new JSONObject(),null);return;}Uri uri=intent.getData();if(!"content".equals(uri.getScheme())){reply(id,false,null,"请通过系统文件选择器保存文件。");return;}workers.execute(()->{try(OutputStream out=getContentResolver().openOutputStream(uri,"w")){if(out==null)throw new IOException("no output");out.write(data.getBytes(StandardCharsets.UTF_8));reply(id,true,new JSONObject().put("path",uri.toString()),null);}catch(Exception e){reply(id,false,null,"文件没有保存完成，请选择其他位置重试。");}});}
+    if(request==104){String id=recognizeId;recognizeId=null;if(id==null)return;if(result==RESULT_OK&&intent!=null){ArrayList<String> words=intent.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS);try{reply(id,true,new JSONObject().put("text",words!=null&&!words.isEmpty()?words.get(0):""),null);}catch(Exception ignored){}}else reply(id,false,null,"这次系统语音输入已取消，还没有文字发出去。");}
+  }
+  private static String decodeText(byte[] bytes)throws Exception{java.nio.charset.Charset charset=StandardCharsets.UTF_8;int offset=0;if(bytes.length>=2&&bytes[0]==(byte)0xff&&bytes[1]==(byte)0xfe){charset=StandardCharsets.UTF_16LE;offset=2;}else if(bytes.length>=2&&bytes[0]==(byte)0xfe&&bytes[1]==(byte)0xff){charset=StandardCharsets.UTF_16BE;offset=2;}try{return charset.newDecoder().onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(bytes,offset,bytes.length-offset)).toString();}catch(Exception e){throw new Exception("这份文本的编码暂时读不准，请另存为UTF-8后再导入。");}}
+  private static byte[] docxXml(byte[] bytes)throws Exception{
+    if(bytes.length<22)throw new Exception("这份DOCX压缩结构不完整。");ByteBuffer b=ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN);int eocd=-1;for(int i=bytes.length-22;i>=Math.max(0,bytes.length-65557);i--)if(b.getInt(i)==0x06054b50&&i+22+(b.getShort(i+20)&65535)==bytes.length){eocd=i;break;}
+    if(eocd<0||b.getShort(eocd+4)!=0||b.getShort(eocd+6)!=0)throw new Exception("这份DOCX压缩结构暂不支持。");int count=b.getShort(eocd+10)&65535;long size=b.getInt(eocd+12)&0xffffffffL,start=b.getInt(eocd+16)&0xffffffffL;if(count==65535||count>10000||(b.getShort(eocd+8)&65535)!=count||start+size>eocd)throw new Exception("这份DOCX目录过大或不完整。");
+    int at=(int)start;byte[] found=null;for(int i=0;i<count;i++){if(at+46>start+size||b.getInt(at)!=0x02014b50)throw new Exception("这份DOCX目录损坏。");int n=b.getShort(at+28)&65535,extra=b.getShort(at+30)&65535,comment=b.getShort(at+32)&65535,end=at+46+n+extra+comment;if(end>start+size)throw new Exception("这份DOCX目录长度无效。");String name=new String(bytes,at+46,n,StandardCharsets.UTF_8);
+      if("word/document.xml".equals(name)){if(found!=null)throw new Exception("这份DOCX有重复正文。");int flags=b.getShort(at+8)&65535,method=b.getShort(at+10)&65535;long compressed=b.getInt(at+20)&0xffffffffL,length=b.getInt(at+24)&0xffffffffL,offset=b.getInt(at+42)&0xffffffffL;if((flags&1)!=0||(method!=0&&method!=8)||length>12*1024*1024||compressed>20*1024*1024||offset+30>start||b.getInt((int)offset)!=0x04034b50)throw new Exception("这份DOCX正文加密、过大或不支持。");int local=(int)offset,ln=b.getShort(local+26)&65535,le=b.getShort(local+28)&65535;long begin=offset+30+ln+le;if(begin+compressed>start||!name.equals(new String(bytes,local+30,ln,StandardCharsets.UTF_8)))throw new Exception("这份DOCX正文位置无效。");ByteArrayInputStream raw=new ByteArrayInputStream(bytes,(int)begin,(int)compressed);if(method==0)found=read(raw,12*1024*1024);else{Inflater inflater=new Inflater(true);try{found=read(new InflaterInputStream(raw,inflater),12*1024*1024);}finally{inflater.end();}}CRC32 crc=new CRC32();crc.update(found);if(found.length!=length||crc.getValue()!=(b.getInt(at+16)&0xffffffffL))throw new Exception("这份DOCX正文校验没有通过。");
+      }at=end;
+    }if(found==null)throw new Exception("这份DOCX没有可读的正文。");return found;
+  }
+  private String novelText(String name,byte[] bytes)throws Exception{
+    String text;if(name.toLowerCase(Locale.ROOT).endsWith(".docx")){String xml=decodeText(docxXml(bytes));if(xml.toUpperCase(Locale.ROOT).contains("<!DOCTYPE")||xml.toUpperCase(Locale.ROOT).contains("<!ENTITY"))throw new Exception("这份DOCX含不支持的外部实体声明。");XmlPullParser parser=Xml.newPullParser();parser.setFeature(XmlPullParser.FEATURE_PROCESS_NAMESPACES,true);parser.setInput(new StringReader(xml));StringBuilder out=new StringBuilder();int event;boolean inText=false;while((event=parser.next())!=XmlPullParser.END_DOCUMENT){String tag=parser.getName();if(event==XmlPullParser.START_TAG){if("t".equals(tag))inText=true;else if("tab".equals(tag))out.append('\t');else if("br".equals(tag)||"cr".equals(tag))out.append('\n');}else if(event==XmlPullParser.TEXT&&inText)out.append(parser.getText());else if(event==XmlPullParser.END_TAG){if("t".equals(tag))inText=false;if("p".equals(tag))out.append('\n');}if(out.length()>5000000)throw new Exception("小说正文超过500万字符，请拆分后导入。");}text=out.toString();}else if(name.toLowerCase(Locale.ROOT).matches(".*\\.(txt|md)$"))text=decodeText(bytes);else throw new Exception("请只选择TXT、MD或DOCX小说文件。");if(text.length()>5000000||text.trim().isEmpty()||text.contains("\0"))throw new Exception("小说正文为空、格式无效或超过500万字符，请拆分后导入。");return text.replaceFirst("^\\ufeff","").replace("\r\n","\n").replace('\r','\n');
+  }
+  private byte[] readEntry(InputStream in,int max)throws Exception{ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] b=new byte[8192];int n;while((n=in.read(b))!=-1){if(out.size()+n>max)throw new Exception("文件正文过大，请拆分后导入。");out.write(b,0,n);}return out.toByteArray();}
+  private void recognize(String id){if(!SpeechRecognizer.isRecognitionAvailable(this)){reply(id,false,null,"这台设备尚未安装可用的系统语音输入服务。");return;}if(recognizeId!=null){reply(id,false,null,"请先完成上一次语音输入。");return;}recognizeId=id;try{startActivityForResult(new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,RecognizerIntent.LANGUAGE_MODEL_FREE_FORM).putExtra(RecognizerIntent.EXTRA_LANGUAGE,"zh-CN").putExtra(RecognizerIntent.EXTRA_PROMPT,"说完后先核对文字，再发送"),104);}catch(Exception e){recognizeId=null;reply(id,false,null,"这台设备的系统语音输入暂时打不开。");}}
+  private void clearTts(File file){try{if(file.getCanonicalPath().startsWith(getCacheDir().getCanonicalPath()+File.separator+"tts-")&&file.getName().endsWith(".wav")&&file.exists())try(FileOutputStream out=new FileOutputStream(file,false)){out.getFD().sync();}}catch(Exception ignored){}}
+  private void speak(String rpcId,JSONObject input)throws Exception{String text=required(input,"text",3500);if(text.trim().isEmpty())throw new Exception("这条消息还没有可朗读的文字。");if(!ttsReady)throw new Exception("这台设备的系统朗读尚未就绪，请安装或启用中文TTS声音。");String name=input.optString("name","角色的声音.wav");String utterance=input.optString("speechId",UUID.randomUUID().toString());identifier(utterance);File file=new File(getCacheDir(),"tts-"+utterance+".wav");TtsCall call=new TtsCall(rpcId,file,name);runOnUiThread(()->{if(tts!=null)tts.stop();for(TtsCall previous:ttsCalls.values()){clearTts(previous.file);reply(previous.rpcId,false,null,"这句先不念啦。");}ttsCalls.clear();ttsCalls.put(utterance,call);int status=tts.synthesizeToFile(text,new Bundle(),file,utterance);if(status!=TextToSpeech.SUCCESS){ttsCalls.remove(utterance);clearTts(file);reply(rpcId,false,null,"系统朗读没有开始，请检查中文声音设置。");}});timer.schedule(()->{TtsCall pending=ttsCalls.remove(utterance);if(pending!=null){runOnUiThread(()->{if(tts!=null)tts.stop();clearTts(file);});reply(rpcId,false,null,"系统朗读等待过久，请稍后再试。");}},45,TimeUnit.SECONDS);}
+  @Override public void onRequestPermissionsResult(int code,String[] permissions,int[] grants){super.onRequestPermissionsResult(code,permissions,grants);boolean allowed=grants.length>0;for(int grant:grants)allowed=allowed&&grant==PackageManager.PERMISSION_GRANTED;if(code==51&&audioRequest!=null){PermissionRequest request=audioRequest;audioRequest=null;if(allowed&&trustedPage&&PAGE.equals(web.getUrl()))request.grant(request.getResources());else request.deny();}if(code==52&&nativePermissionId!=null){String id=nativePermissionId;nativePermissionId=null;if(allowed)recognize(id);else reply(id,false,null,"麦克风权限还没开启；你仍然可以打字聊天。");}}
+  @Override public void onBackPressed(){if(web!=null&&trustedPage)new AlertDialog.Builder(this).setTitle("先回到桌面吗？").setMessage("聊天和草稿会保存在这台设备上。点对点连接会断开。").setNegativeButton("继续聊天",null).setPositiveButton("保存后退出",(d,w)->web.evaluateJavascript("window.__ohwhaleClose&&window.__ohwhaleClose()",null)).show();else super.onBackPressed();}
+  @Override protected void onDestroy(){trustedPage=false;for(HttpCall call:calls.values()){call.cancelled.set(true);if(call.connection!=null)call.connection.disconnect();}if(audioRequest!=null){audioRequest.deny();audioRequest=null;}if(imageChooser!=null){imageChooser.onReceiveValue(null);imageChooser=null;}if(tts!=null){tts.stop();tts.shutdown();}if(web!=null){web.removeJavascriptInterface("OhWhaleNative");web.destroy();}workers.shutdownNow();httpWorkers.shutdownNow();timer.shutdownNow();super.onDestroy();}
+  private static final class HttpCall {volatile HttpURLConnection connection;final AtomicBoolean cancelled=new AtomicBoolean();volatile boolean timedOut;}
+  private static final class TtsCall {final String rpcId,name;final File file;TtsCall(String id,File f,String n){rpcId=id;file=f;name=n;}}
+  private static String hex(byte[] bytes){StringBuilder s=new StringBuilder();for(byte b:bytes)s.append(String.format(Locale.ROOT,"%02x",b&255));return s.toString();}
+  private static void validateWav(byte[] bytes,boolean recording)throws Exception{
+    if(bytes.length<44||bytes.length>20*1024*1024||!new String(bytes,0,4,StandardCharsets.US_ASCII).equals("RIFF")||!new String(bytes,8,4,StandardCharsets.US_ASCII).equals("WAVE"))throw new Exception("录音不是完整的WAV文件，请重新录制。");
+    ByteBuffer b=ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN);if((b.getInt(4)&0xffffffffL)!=bytes.length-8)throw new Exception("录音文件长度与声明不一致。");
+    int format=0,channels=0,rate=0,bits=0,data=0,align=0,at=12;long byteRate=0;boolean foundFmt=false,foundData=false;
+    for(;at+8<=bytes.length;){String tag=new String(bytes,at,4,StandardCharsets.US_ASCII);long size=b.getInt(at+4)&0xffffffffL,end=at+8+size+(size&1);if(end>bytes.length)throw new Exception("录音数据没有读完整。");
+      if(tag.equals("fmt ")){if(foundFmt||size<16)throw new Exception("录音格式块不完整或重复。");foundFmt=true;format=b.getShort(at+8)&65535;channels=b.getShort(at+10)&65535;rate=b.getInt(at+12);byteRate=b.getInt(at+16)&0xffffffffL;align=b.getShort(at+20)&65535;bits=b.getShort(at+22)&65535;}
+      if(tag.equals("data")){if(foundData||!foundFmt)throw new Exception("录音数据块顺序或数量不正确。");foundData=true;data=(int)size;}at=(int)end;
+    }
+    if(at!=bytes.length||!foundFmt||!foundData||format!=1||channels<1||channels>2||(bits!=8&&bits!=16)||rate<8000||rate>48000||align!=channels*bits/8||byteRate!=(long)rate*align||data<=0||data%align!=0||data/(double)byteRate>300)throw new Exception("录音格式暂不支持，请使用5分钟内标准PCM WAV。");
+    if(recording&&(channels!=1||rate!=16000||bits!=16||data>16000*2*55))throw new Exception("录音需要单声道16k WAV，最长55秒。");
+  }
+
+  private final class Vault {
+    private final File root=new File(getFilesDir(),"encrypted-documents");
+    private final File mediaRoot=new File(getFilesDir(),"encrypted-media");
+    private final File secretsRoot=new File(getFilesDir(),"encrypted-secrets");
+    private final SecretKey key;
+    Vault()throws Exception{KeyStore store=KeyStore.getInstance("AndroidKeyStore");store.load(null);String alias="ohwhale-master-v1";if(!store.containsAlias(alias)){for(File folder:new File[]{root,mediaRoot,secretsRoot,new File(getFilesDir(),"encrypted-originals")})if(folder.isDirectory()&&folder.list()!=null&&folder.list().length>0)throw new IOException("资料已有密文但本机密钥缺失，请保留原数据。");KeyGenerator gen=KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES,"AndroidKeyStore");gen.init(new KeyGenParameterSpec.Builder(alias,KeyProperties.PURPOSE_ENCRYPT|KeyProperties.PURPOSE_DECRYPT).setBlockModes(KeyProperties.BLOCK_MODE_GCM).setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE).setKeySize(256).setRandomizedEncryptionRequired(true).build());gen.generateKey();}key=(SecretKey)store.getKey(alias,null);if(key==null)throw new IOException("资料密钥暂不可用。");for(File folder:new File[]{root,mediaRoot,secretsRoot})if(!folder.isDirectory()&&!folder.mkdirs())throw new IOException("本机资料目录无法创建。");}
+    private byte[] seal(byte[] data,String aad)throws Exception{Cipher c=Cipher.getInstance("AES/GCM/NoPadding");c.init(Cipher.ENCRYPT_MODE,key);c.updateAAD(aad.getBytes(StandardCharsets.UTF_8));byte[] iv=c.getIV(),encrypted=c.doFinal(data);ByteArrayOutputStream out=new ByteArrayOutputStream();out.write(new byte[]{'O','W','E','1',(byte)iv.length});out.write(iv);out.write(encrypted);return out.toByteArray();}
+    private byte[] unseal(byte[] data,String aad)throws Exception{if(data.length<33||data[0]!='O'||data[1]!='W'||data[2]!='E'||data[3]!='1')throw new IOException("资料加密格式无法识别。");int n=data[4]&255;if(n!=12||data.length<5+n+16)throw new IOException("资料加密记录不完整。");Cipher c=Cipher.getInstance("AES/GCM/NoPadding");c.init(Cipher.DECRYPT_MODE,key,new GCMParameterSpec(128,Arrays.copyOfRange(data,5,5+n)));c.updateAAD(aad.getBytes(StandardCharsets.UTF_8));return c.doFinal(Arrays.copyOfRange(data,5+n,data.length));}
+    private void save(File file,byte[] data,String aad,boolean exclusive)throws Exception{byte[] encrypted=seal(data,aad);file.getParentFile().mkdirs();if(exclusive){if(!file.createNewFile())throw new java.nio.file.FileAlreadyExistsException(file.getName());try(FileOutputStream out=new FileOutputStream(file,false)){out.write(encrypted);out.getFD().sync();}}else{AtomicFile target=new AtomicFile(file);FileOutputStream stream=null;try{stream=target.startWrite();stream.write(encrypted);target.finishWrite(stream);}catch(Exception e){if(stream!=null)target.failWrite(stream);throw e;}}}
+    private File virtual(String logical)throws Exception{if(logical==null||!logical.startsWith("/userdata/")||logical.contains("\\")||logical.contains("\0")||logical.contains(":"))throw new Exception("本机文件路径未开放。");for(String part:logical.split("/"))if(part.equals("..")||part.equals("."))throw new Exception("本机文件路径未开放。");File f=new File(root,logical.substring("/userdata/".length()));if(!f.getCanonicalPath().startsWith(root.getCanonicalPath()+File.separator)&&!f.getCanonicalPath().equals(root.getCanonicalPath()))throw new Exception("本机文件不能越出资料目录。");return f;}
+    private String asset(String logical)throws Exception{if(!logical.startsWith("/embedded/")||logical.contains("..")||logical.contains("\\"))throw new FileNotFoundException();String relative=logical.substring("/embedded/".length());if(relative.startsWith("src/ui/"))return "www/"+relative.substring("src/ui/".length());return "reference/"+relative;}
+    synchronized JSONObject stat(String logical)throws Exception{if(logical.equals("/userdata"))return new JSONObject().put("exists",true).put("kind","directory").put("size",0);if(logical.startsWith("/embedded/")){try{byte[] b=read(getAssets().open(asset(logical)),MAX_FILE);return new JSONObject().put("exists",true).put("kind","file").put("size",b.length);}catch(FileNotFoundException e){return new JSONObject().put("exists",false);}}File f=virtual(logical);return new JSONObject().put("exists",f.exists()).put("kind",f.isDirectory()?"directory":"file").put("size",f.isFile()?Math.max(0,f.length()-33):0);}
+    synchronized JSONArray list(String logical)throws Exception{File f=logical.equals("/userdata")?root:virtual(logical);if(!f.isDirectory())throw new FileNotFoundException();JSONArray result=new JSONArray();File[] files=f.listFiles();if(files!=null){Arrays.sort(files,Comparator.comparing(File::getName));for(File child:files)result.put(new JSONObject().put("name",child.getName()).put("kind",child.isDirectory()?"directory":"file"));}return result;}
+    synchronized void mkdir(String logical)throws Exception{if(logical.equals("/userdata"))return;File f=virtual(logical);if(!f.isDirectory()&&!f.mkdirs())throw new IOException("本机目录暂时无法创建，请检查剩余空间。");}
+    synchronized byte[] readVirtual(String logical)throws Exception{if(logical.startsWith("/embedded/"))return read(getAssets().open(asset(logical)),MAX_FILE);File f=virtual(logical);if(!f.isFile())throw new FileNotFoundException();return unseal(read(new AtomicFile(f).openRead(),MAX_FILE+128),logical);}
+    synchronized void writeVirtual(String logical,byte[] data,boolean exclusive)throws Exception{save(virtual(logical),data,logical,exclusive);}
+    synchronized String putSecret(String value,String base)throws Exception{if(value.isEmpty()||value.length()>10000||value.matches("(?s).*[\\x00-\\x1f\\x7f].*"))throw new Exception("请重新填写完整的API密钥。");String id=UUID.randomUUID().toString();JSONObject record=new JSONObject().put("value",value).put("endpoint",base);save(new File(secretsRoot,id+".enc"),record.toString().getBytes(StandardCharsets.UTF_8),"secret:"+id,true);return Base64.encodeToString(id.getBytes(StandardCharsets.US_ASCII),Base64.NO_WRAP);}
+    synchronized String putFriendSecret(String value,String origin)throws Exception{if(!value.matches("[A-Za-z0-9_-]{32,128}")||!FRIENDS_ORIGIN.equals(origin))throw new Exception("本机好友凭据不完整。");String id=UUID.randomUUID().toString();JSONObject record=new JSONObject().put("value",value).put("origin",origin).put("purpose","friends-v1");save(new File(secretsRoot,id+".friend.enc"),record.toString().getBytes(StandardCharsets.UTF_8),"friend-secret:"+id,true);return Base64.encodeToString(id.getBytes(StandardCharsets.US_ASCII),Base64.NO_WRAP);}
+    synchronized String friendSecret(String token,String url,String method)throws Exception{friendsRoute(url,method);String id=new String(base64(token,100),StandardCharsets.US_ASCII);identifier(id);JSONObject record=new JSONObject(new String(unseal(read(new FileInputStream(new File(secretsRoot,id+".friend.enc")),20000),"friend-secret:"+id),StandardCharsets.UTF_8));if(!FRIENDS_ORIGIN.equals(record.getString("origin"))||!"friends-v1".equals(record.getString("purpose")))throw new Exception("本机好友凭据不属于当前联机服务。");return record.getString("value");}
+    synchronized String managedSecret(String token,String url,String method)throws Exception{managedRoute(url,method);String id=new String(base64(token,100),StandardCharsets.US_ASCII);identifier(id);JSONObject record=new JSONObject(new String(unseal(read(new FileInputStream(new File(secretsRoot,id+".friend.enc")),20000),"friend-secret:"+id),StandardCharsets.UTF_8));if(!FRIENDS_ORIGIN.equals(record.getString("origin"))||!"friends-v1".equals(record.getString("purpose")))throw new Exception("本机托管身份不属于当前联机服务。");return record.getString("value");}
+    synchronized String secret(String token,String url)throws Exception{String id=new String(base64(token,100),StandardCharsets.US_ASCII);identifier(id);File file=new File(secretsRoot,id+".enc");JSONObject record=new JSONObject(new String(unseal(read(new FileInputStream(file),20000),"secret:"+id),StandardCharsets.UTF_8));String bound=record.getString("endpoint"),expected=bound.endsWith("/chat/completions")?bound:bound+"/chat/completions";if(!url.equals(expected))throw new Exception("接口地址已变化，请重新保存密钥；旧密钥不会发往新地址。");return record.getString("value");}
+    synchronized JSONObject media(String id)throws Exception{identifier(id);File file=new File(mediaRoot,id+".json.enc");if(!file.isFile())throw new Exception("本机图片或声音已经读不到，请重新添加。");return new JSONObject(new String(unseal(read(new FileInputStream(file),20000),"media-meta:"+id),StandardCharsets.UTF_8));}
+    synchronized byte[] mediaBytes(String id)throws Exception{media(id);return unseal(read(new FileInputStream(new File(mediaRoot,id+".enc")),20*1024*1024+128),"media:"+id);}
+    synchronized JSONObject putMedia(byte[] data,String type,String name,String suppliedMime)throws Exception{
+      String actual;if("image".equals(type)){
+        if(data.length==0||data.length>10*1024*1024)throw new Exception("图片最多10MB，请选择较小图片。");BitmapFactory.Options bounds=new BitmapFactory.Options();bounds.inJustDecodeBounds=true;BitmapFactory.decodeByteArray(data,0,data.length,bounds);String detected=bounds.outMimeType;
+        if(bounds.outWidth<=0||bounds.outHeight<=0||(long)bounds.outWidth*bounds.outHeight>40000000||!Arrays.asList("image/png","image/jpeg","image/webp","image/gif").contains(detected))throw new Exception("图片格式或尺寸暂不支持，请选择PNG、JPEG、WebP或GIF。");
+        if(suppliedMime!=null&&!suppliedMime.isEmpty()&&!detected.equals(suppliedMime))throw new Exception("文件真实格式与声明不一致。");BitmapFactory.Options options=new BitmapFactory.Options();options.inSampleSize=1;while(Math.max(bounds.outWidth,bounds.outHeight)/options.inSampleSize>2048)options.inSampleSize*=2;Bitmap bitmap=BitmapFactory.decodeByteArray(data,0,data.length,options);if(bitmap==null)throw new Exception("图片像素没有读完整，请重新选择。");
+        try(ByteArrayOutputStream out=new ByteArrayOutputStream()){if(!bitmap.compress(Bitmap.CompressFormat.PNG,100,out)||out.size()>10*1024*1024)throw new Exception("图片转码后过大，请先缩小图片。");data=out.toByteArray();}finally{bitmap.recycle();}actual="image/png";
+      }else if("audio".equals(type)){validateWav(data,false);actual="audio/wav";if(suppliedMime!=null&&!suppliedMime.isEmpty()&&!actual.equals(suppliedMime))throw new Exception("文件真实格式与声明不一致。");}else throw new Exception("文件只支持图片或WAV声音。");
+      String id=UUID.randomUUID().toString();if(name==null||name.isEmpty())name="image".equals(type)?"图片":"声音.wav";name=name.replaceAll("[\\x00-\\x1f\\x7f/\\\\]","_");if(name.length()>180)name=name.substring(0,180);JSONObject meta=new JSONObject().put("id",id).put("type",type).put("mime",actual).put("name",name).put("url","lingyu-media://asset/"+id).put("bytes",data.length);save(new File(mediaRoot,id+".enc"),data,"media:"+id,true);save(new File(mediaRoot,id+".json.enc"),meta.toString().getBytes(StandardCharsets.UTF_8),"media-meta:"+id,true);return meta;
+    }
+    synchronized JSONObject fromData(JSONObject input)throws Exception{String data=required(input,"dataUrl",28*1024*1024);int comma=data.indexOf(',');if(comma<0)throw new Exception("文件编码不完整。");String header=data.substring(0,comma);if(!header.matches("data:(image/(png|jpeg|webp|gif)|audio/wav);base64"))throw new Exception("文件格式暂不支持。");String mime=header.substring(5,header.indexOf(';'));return putMedia(base64(data.substring(comma+1),20*1024*1024),required(input,"type",10),input.optString("name","导入附件"),mime);}
+    synchronized String archiveOriginal(String name,byte[] bytes)throws Exception{String id=UUID.randomUUID().toString();File folder=new File(getFilesDir(),"encrypted-originals");save(new File(folder,id+".enc"),bytes,"original:"+id,true);JSONObject meta=new JSONObject().put("id",id).put("name",name).put("sha256",hex(MessageDigest.getInstance("SHA-256").digest(bytes)));save(new File(folder,id+".json.enc"),meta.toString().getBytes(StandardCharsets.UTF_8),"original-meta:"+id,true);return "android-original:"+id;}
+  }
+}

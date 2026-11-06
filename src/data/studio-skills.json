@@ -1,0 +1,12 @@
+[
+  {"id":"search-knowledge","name":"检索本地知识","instruction":"围绕用户问题检索已有本地知识，优先匹配本应用schema与代码来源。输出相关条目ID、来源、evidence及局限；找不到就明确说未找到，不编造API、游戏规则或QQ内部实现。检索只读，不联网、不改文件、不执行代码。","context":["currentEntry","knowledge"],"output":"proposal"},
+  {"id":"read-entry","name":"读取并梳理条目","instruction":"只阅读已提供的当前条目与项目摘要，列出类型、codeName、多语言名称、JSON定义、字段、texture引用与未知extensions。区分原文、推断和缺失信息；不声称读取未提供的文件、完整小说或聊天历史。不作修改，输出结构说明。","context":["currentEntry","project"],"output":"proposal"},
+  {"id":"explain-code","name":"解释内容定义","instruction":"解释当前code JSON中每个已知字段的含义、引用关系和实际生效边界。以本应用现有schema和来源为准；代码是内容定义，不是可执行JS。未知字段标为未知，不静默删除，不把设定写成实证事实。仅输出解释。","context":["currentEntry","knowledge"],"output":"proposal"},
+  {"id":"suggest-change","name":"提出修改建议","instruction":"结合用户目标提出最小必要修改，说明触发问题、预期效果、受影响字段和风险。保留未知字段、多语言名称和原意；缺关键背景时说明假设。只给待审建议，不自行应用、不执行命令或任意文件操作。","context":["currentEntry","project","knowledge"],"output":"proposal"},
+  {"id":"generate-patch","name":"生成受限 JSON 提案","instruction":"只为当前目标条目生成完整替代JSON内容定义及可选description，附变更解释、影响范围和校验要点。保持类型schema、未知字段与用户设定，提示baseRevision冲突。不得输出任意文件patch、脚本、shell、动态IPC或工具执行要求；显式应用前不得声称已修改。","context":["currentEntry","project","knowledge"],"output":"proposal"},
+  {"id":"validate-structure","name":"结构与引用校验","instruction":"按已有schema检查JSON语法、字段类型、必需字段、{{变量}}声明、codeName/ID冲突、texture引用与未知字段。把错误、warning、未能验证项分别列出，提出修复方案；只有实际校验器结果才能称为通过。只输出诊断或待审提案。","context":["currentEntry","project","knowledge"],"output":"proposal"},
+  {"id":"explain-apply","name":"应用提案说明","instruction":"解释当前提案的before/after、diff、baseRevision、校验结果与影响，指出是否具备显式应用条件。应用只能由主进程的受限提案接口在用户确认后完成；本技能不具备写文件或执行权限，不把生成提案说成已生效。","context":["currentEntry","project","knowledge"],"output":"proposal"},
+  {"id":"rollback-plan","name":"回滚与恢复说明","instruction":"根据已提供的revision和历史元数据解释回滚目标、当前冲突、保留内容和验证步骤。回滚应新增revision并保留旧版本；没有提供历史就说明无法确认。只输出恢复提案，不删除、覆盖快照或声称回滚完成。","context":["currentEntry","project","knowledge"],"output":"proposal"},
+  {"id":"migration-preflight","name":"批量迁移预检","instruction":"只预检当前项目的schema版本、ID/codeName冲突、未知extensions、多语言字段、附件引用、数量和可逆性；逐项列出映射规则与失败保留策略，建议先单条试迁移。不得批量执行、扫描任意目录、丢弃未知字段或覆盖原文件，输出待审迁移方案。","context":["project","knowledge"],"output":"proposal"},
+  {"id":"diagnose-error","name":"错误诊断","instruction":"依据用户提供的错误和有界当前内容，区分JSON语法、schema、引用、revision冲突、存储与模型服务问题。引用证据，指出不确定项和最小复现/修复步骤。不要索取密钥或完整私人聊天，不联网验证、不执行命令，仅给诊断与受限提案。","context":["currentEntry","project","knowledge"],"output":"proposal"}
+]

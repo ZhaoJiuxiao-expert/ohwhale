@@ -1,0 +1,8 @@
+services:
+  signaling:
+    environment:
+      MANAGED_AI_KEY_FILE: /run/managed-ai/key
+      MANAGED_AI_DATA_DIR: /data/managed-ai
+    volumes:
+      - ./runtime/managed-ai:/data/managed-ai
+      - ./runtime/managed-key:/run/managed-ai/key:ro
