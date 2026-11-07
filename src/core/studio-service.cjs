@@ -14,12 +14,12 @@ function presetFile(ref){
 class StudioService{
  constructor({dir,studio,knowledge,store,media,harness,onChange=()=>{}}){
   Object.assign(this,{studio,knowledge,store,media,harness,onChange});this.dir=path.join(dir,'studio-events');fs.mkdirSync(this.dir,{recursive:true});
-  this.drafts=new Map();this.published=new Map();this.busy=false;this.lastStamp=0;
+  this.drafts=new Map();this.published=new Map();this.messageStickers=new Map();this.busy=false;this.lastStamp=0;
   for(const file of fs.readdirSync(this.dir).filter(x=>/^\d{16}-[a-f0-9-]+\.json$/.test(x)).sort()){
    this.lastStamp=Math.max(this.lastStamp,Number(file.slice(0,16)));try{const saved=JSON.parse(fs.readFileSync(path.join(this.dir,file),'utf8'));if(crypto.createHash('sha256').update(JSON.stringify(saved.event)).digest('hex')!==saved.sha256)continue;this.reduce(saved.event);}catch{}
   }
  }
- reduce(event){if(event.kind==='draft'){const key=event.projectId+':'+event.entryId;if(event.entry)this.drafts.set(key,event);else this.drafts.delete(key);}if(event.kind==='publish')this.published.set(event.projectId+':'+event.entry.id,event);}
+ reduce(event){if(event.kind==='draft'){const key=event.projectId+':'+event.entryId;if(event.entry)this.drafts.set(key,event);else this.drafts.delete(key);}if(event.kind==='publish')this.published.set(event.projectId+':'+event.entry.id,event);if(event.kind==='chat-sticker'&&/^[a-f0-9]{64}$/.test(event.digest)&&this.validStickerAttachment(event.attachment))this.messageStickers.set(event.digest,event);}
  record(event){this.lastStamp=Math.max(Date.now(),this.lastStamp+1);const file=String(this.lastStamp).padStart(16,'0')+'-'+crypto.randomUUID()+'.json',body=JSON.stringify({event,sha256:crypto.createHash('sha256').update(JSON.stringify(event)).digest('hex')});const fd=fs.openSync(path.join(this.dir,file),'wx');try{fs.writeFileSync(fd,body);fs.fsyncSync(fd);}finally{fs.closeSync(fd);}this.reduce(event);}
  entry(projectId,entryId){const p=this.studio.getProject(projectId),e=p.entries.find(x=>x.id===entryId);if(!e)throw Error('条目不存在，请先保存');return {p,e};}
  draftSave({projectId,entry}={}){
@@ -30,7 +30,28 @@ class StudioService{
  draftList(){return [...this.drafts.values()].map(({projectId,entry,at})=>({projectId,entry:clone(entry),at}));}
  draftRemove({projectId,entryId}){this.studio.getProject(projectId);bounded(entryId,100,'标识');this.record({kind:'draft',projectId,entryId,entry:null,at:new Date().toISOString()});return true;}
  skills(){return [...baseSkills,...[...this.published.values()].filter(x=>x.entry.type==='skill').map(x=>{const c=JSON.parse(x.entry.code);return {id:'user-'+x.entry.id,name:x.entry.displayNames.zhCN,instruction:c.instruction,context:c.context,output:'proposal'};})];}
- customStickers(){return [...this.published.values()].filter(x=>x.entry.type==='sticker').map(x=>({id:'custom-'+x.entry.id,name:x.entry.displayNames.zhCN,tags:JSON.parse(x.entry.code).tags,character:'自定义',src:x.entry.texture?.url||x.entry.textureRef,sourceUrl:'',attribution:'用户自定义',rights:'由导入者确认使用范围'}));}
+ validStickerAttachment(a){return !!a&&typeof a.id==='string'&&/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(a.id)&&a.type==='image'&&/^image\/(png|jpeg|webp|gif)$/.test(a.mime)&&a.url==='lingyu-media://asset/'+a.id&&Number.isSafeInteger(a.bytes)&&a.bytes>0&&a.bytes<=10*1024*1024&&typeof a.name==='string'&&a.name.length<=100&&!/[\x00-\x1f]/.test(a.name);}
+ messageSticker(event){return {id:'saved-'+event.digest,name:event.attachment.name||'收藏的小表情',tags:['收藏'],character:'自定义',src:event.attachment.url,attachment:clone(event.attachment),sourceUrl:'',attribution:'来自聊天收藏',rights:'请确认拥有分享这张图片的权限'};}
+ customStickers(){return [...[...this.published.values()].filter(x=>x.entry.type==='sticker').map(x=>({id:'custom-'+x.entry.id,name:x.entry.displayNames.zhCN,tags:JSON.parse(x.entry.code).tags,character:'自定义',src:x.entry.texture?.url||x.entry.textureRef,...(x.entry.texture?{attachment:clone(x.entry.texture)}:{}),sourceUrl:'',attribution:'用户自定义',rights:'由导入者确认使用范围'})),...[...this.messageStickers.values()].map(event=>this.messageSticker(event))];}
+ saveMessageSticker(input){
+  if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(key=>!['conversationId','messageId','attachmentId'].includes(key)))throw Error('请从聊天里的图片打开收藏菜单呀。');
+  for(const key of ['conversationId','messageId','attachmentId'])if(typeof input[key]!=='string'||!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,99}$/.test(input[key])||['__proto__','constructor','prototype'].includes(input[key]))throw Error('这张图片的消息标识不完整，请重新打开聊天呀。');
+  const conversation=this.store.getConversation(input.conversationId);
+  if(!conversation)throw Error('暂时找不到这段聊天啦，请重新打开后试试。');
+  const message=this.store.getMessages(conversation.id).find(item=>item.id===input.messageId);
+  const attached=message?.attachments?.find(item=>item.id===input.attachmentId);
+  if(!attached||attached.type!=='image')throw Error('只能收藏这条消息里的图片呀。');
+  // Resolve from the owned message only. Never accept caller-supplied paths or URLs.
+  const attachment=this.media.validated([attached])[0];
+  if(!this.validStickerAttachment(attachment))throw Error('这张本机图片没有读完整，请重新发送后再收藏呀。');
+  const {buffer}=this.media.get(attachment.id);
+  if(!Buffer.isBuffer(buffer)||buffer.length!==attachment.bytes)throw Error('图片原件不完整，暂时无法收藏呀。');
+  const digest=crypto.createHash('sha256').update(buffer).digest('hex'),existing=this.messageStickers.get(digest);
+  if(existing)return {sticker:this.messageSticker(existing),duplicate:true};
+  const event={kind:'chat-sticker',digest,attachment:clone(attachment),at:new Date().toISOString()};
+  this.record(event);this.onChange();
+  return {sticker:this.messageSticker(event),duplicate:false};
+ }
  seed({projectId}){
   let p=this.studio.getProject(projectId);
   for(const a of defaults){const codeName='builtin_'+a.id;if(p.entries.some(e=>e.codeName===codeName))continue;p=this.studio.saveEntry({projectId,entry:{id:crypto.randomUUID(),type:'character',codeName,displayNames:{zhCN:a.name},description:a.subtitle,textureRef:a.avatar,code:JSON.stringify({persona:a.persona,tags:a.tags},null,2),fields:{},extensions:{}}});}

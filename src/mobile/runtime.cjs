@@ -56,6 +56,7 @@ function installMobileBridge({host,fetcher=nativeFetch}={}){
   send:async input=>{const result=await harness.send({...input,attachments:media.validated(input?.attachments??[])});const c=store.getConversation(input.conversationId);if(c?.agentId)plugins.recordActivity({agentId:c.agentId});changed();return result;},
   cancel:input=>harness.cancel(input?.conversationId),
   importMedia:()=>native.rpc('pickImage'),pasteImage:()=>native.rpc('pasteImage'),peerMedia:input=>media.fromData(input),readMedia:input=>media.resolve(input?.id),
+  saveMessageSticker:input=>service.saveMessageSticker(input),
   transcribe(){throw Error('Android 版暂不转写已录制的WAV。可以用系统语音输入，或保存原声后手工补上文字。');},
   saveRecording:input=>{if(!plugins.getPublic().settings.voice)throw Error('先打开语音小开关，再留下这段声音吧。');return native.rpc('saveRecording',input);},
   nativeRecognize:()=>native.rpc('nativeRecognize'),stopSpeech:input=>{const prefix=input?.conversationId?input.conversationId+':'+(input.messageId||''):undefined;const stopped=voiceSession.stop(prefix);return stopped||!prefix?native.rpc('stopSpeech'):false;},

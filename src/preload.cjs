@@ -1,5 +1,6 @@
 const {contextBridge,ipcRenderer}=require('electron');
 const methods=['bootstrap','saveProvider','saveAgent','createConversation','setConversation','updateSettings','saveDraft','send','cancel','importMedia','pasteImage','transcribe','speak','exportAgent','importAgent','exportHistory','copyText','recordPeer','recordPeerOutgoing','peerMedia','readMedia','setPeerShare','aiForPeer','shareStart','shareStop','shareStatus','pluginConfigure','remember','forgetMemory','addDiary','generateDiary','spacePost','spaceLike','spaceComment','spaceGenerate'];
+methods.push('saveMessageSticker');
 let closeHandler=async()=>{};
 methods.push('studioNovels');
 methods.push('stopSpeech','saveRecording');
