@@ -1,6 +1,6 @@
 # 哦鲸鲸 · OhWhale
 
-哦鲸鲸 1.3.1 是一款 Windows 和 Android 聊天软件。用户可以与 AI 角色收发文字、图片和语音，通过鲸鲸号或二维码添加好友并发起点对点聊天，也可以编辑和分享角色卡。服务端提供好友申请、联机信令和带配额保护的国产模型代理。
+哦鲸鲸 1.3.2 是一款 Windows 和 Android 聊天软件。用户可以与 AI 角色收发文字、图片和语音，通过鲸鲸号或二维码添加好友并发起点对点聊天，也可以编辑和分享角色卡。服务端提供好友申请、联机信令和带配额保护的国产模型代理。
 
 ## 运行桌面端
 
@@ -18,7 +18,7 @@ pnpm start
 - `src/ui/app.ico`，Windows 图标
 - `android/res/drawable/app_icon.png`，Android 图标，构建时会从 `src/ui/assets/deepseek-avatar.png` 重新生成
 
-恢复这些资源后再打包或运行需要验证内置图片的测试。用户使用步骤见 [1.3.1 使用指南](docs/使用指南-1.3.1.md)。网络服务地址位于 `src/data/network-defaults.json`。
+恢复这些资源后再打包或运行需要验证内置图片的测试。基本使用步骤见 [使用指南](docs/使用指南-1.3.1.md)；新增头像与表情收藏操作及验证范围见 [Android 1.3.2 更新说明](docs/Android-1.3.2.md)。网络服务地址位于 `src/data/network-defaults.json`。
 
 ## 换头像与收藏表情
 
