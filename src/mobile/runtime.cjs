@@ -7,6 +7,7 @@ const crypto=require('./crypto.cjs');
 const {nativeFetch}=require('./fetch.cjs');
 const {friendsFetch,managedFetch}=require('./friends-fetch.cjs');
 const {ManagedClient}=require('../core/managed-client.cjs');
+const {createMobileProactive}=require('./proactive.cjs');
 const {FriendsClient,FRIENDS_METHODS}=require('../core/friends-client.cjs');
 const {ChatStore,validateAttachments}=require('../core/store.cjs');
 const {Harness}=require('../core/harness.cjs');
@@ -25,7 +26,7 @@ function text(value,max=8000){if(typeof value!=='string'||value.length>max||valu
 function installMobileBridge({host,fetcher=nativeFetch}={}){
  if(host)native.setHost(host);
  const dir='/userdata';fs.mkdirSync(dir,{recursive:true});
- const listeners=new Set();const emit=event=>{for(const listener of listeners)try{listener(event);}catch{}};const changed=()=>emit({type:'state'});
+ let proactive;const listeners=new Set();const emit=event=>{for(const listener of listeners)try{listener(event);}catch{}};const changed=()=>{proactive?.scheduleSync();emit({type:'state'});};
  let encryptEndpoint='';
  const store=new ChatStore({dir:path.join(dir,'chat'),encrypt:value=>native.sync('secretPut',{value,endpoint:encryptEndpoint}),decrypt:token=>'@android-key:'+token});
  const friends=new FriendsClient({dir:path.join(dir,'friends'),fetch:friendsFetch,encrypt:(value,serverUrl)=>native.sync('friendsSecretPut',{value,endpoint:serverUrl}),decrypt:token=>'@android-friend:'+token});
@@ -38,19 +39,20 @@ function installMobileBridge({host,fetcher=nativeFetch}={}){
  };
  const agentById=id=>{const agent=store.getPublic().agents.find(a=>a.id===id);if(!agent)throw Error('这位角色暂时没找到，请重新选择。');return agent;};
  const plugins=new PluginStore({dir:path.join(dir,'plugins'),validateAgent:agentById,validateAttachments:a=>media.validated(a)});
- const harness=new Harness({store,managedRequest:input=>managed.request(input),fetch:fetcher,resolveImage:a=>media.resolve(a.id),onEvent:emit,contextForAgent:id=>{const state=plugins.getPublic();return [state.settings.stickers?'可以偶尔用一个表情标记：[sticker:rice]开饭、[sticker:hello]招呼、[sticker:hug]安慰、[sticker:think]思考、[sticker:cheer]加油、[sticker:sleep]晚安；不必每条都使用。':'',plugins.contextForAgent(id)].filter(Boolean).join('\n').slice(0,4000);},log:event=>fs.appendFileSync(path.join(dir,'api-usage.jsonl'),JSON.stringify(event)+'\n')});
+ const harness=new Harness({store,managedRequest:input=>managed.request(input),fetch:fetcher,resolveImage:a=>media.resolve(a.id),onEvent:event=>{emit(event);if(event.type==='state')proactive?.scheduleSync();},contextForAgent:id=>{const state=plugins.getPublic();return [state.settings.stickers?'可以偶尔用一个表情标记：[sticker:rice]开饭、[sticker:hello]招呼、[sticker:hug]安慰、[sticker:think]思考、[sticker:cheer]加油、[sticker:sleep]晚安；不必每条都使用。':'',plugins.contextForAgent(id)].filter(Boolean).join('\n').slice(0,4000);},log:event=>fs.appendFileSync(path.join(dir,'api-usage.jsonl'),JSON.stringify(event)+'\n')});
  const studio=new StudioStore({dir,validateAttachment:a=>{const saved=media.validated([a])[0];if(saved.type!=='image')throw Error('请为内容选择一张图片。');return saved;}});
  const sharedSources=new Set(['src/core/store.cjs','src/core/harness.cjs','src/core/plugins.cjs','src/core/studio.cjs','src/core/knowledge.cjs','src/core/studio-service.cjs','src/core/role-card.cjs']);
  const mobileSources=knowledgeSources.filter(s=>sharedSources.has(s.source)||/^https:\/\//.test(s.source));
  mobileSources.push({id:'android-privacy',title:'Android 本机安全与能力边界',source:'android/src/cn/ohwhale/chat/MainActivity.java',evidence:'code-verified',verify:['AndroidKeyStore','AES/GCM/NoPadding','OhWhaleNative'],text:'Android 使用 Keystore AES-GCM 保护本机聊天、记忆、项目快照、原件与媒体。网页只加载内置可信资源；模型HTTP由原生层执行，密钥通过绑定接口地址的opaque handle引用，不返回bootstrap。角色名与模型分开，工作台使用中性system，P2P共享不带主人私聊或记忆。录音先生成真实WAV，可手工补文字；系统语音输入依设备能力而定，不假装转写。系统TTS生成真实音频后由界面播放。Android版不启动本机HTTP共享服务器。'});
  const knowledge=new KnowledgeStore({dir:path.join(dir,'knowledge'),defaultSources:mobileSources,skills});
  const service=new StudioService({dir,studio,knowledge,store,media,harness,onChange:changed});
- const voiceSession=new VoiceSession();let capabilities={},closeHandler=async()=>{};const shares=new Map();let greetingBusy=false;
+ const voiceSession=new VoiceSession();let capabilities={},closeHandler=async()=>{};const shares=new Map();
  const revoke=()=>{for(const session of shares.values())session.controller?.abort();shares.clear();};
  function validateSharedAgent(id){const a=agentById(id),p=store.getProvider(a.providerId);if(!p?.consent)throw Error('请先为这位角色配置并授权模型服务。');if(!p.managed&&!p.apiKey&&!/^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(?::|\/|$)/.test(p.baseUrl))throw Error('请先保存这位角色所用的API密钥。');return a;}
  async function saveJson(name,value){return native.rpc('exportJson',{name,text:JSON.stringify(value,null,2)});}
  const methods={
-  async bootstrap(){capabilities=await native.rpc('capabilities');return {state:store.getPublic(),plugins:plugins.getPublic(),runtime:{version:APP_VERSION,platform:'android',capabilities,dataDirectory:'Android 应用私有加密资料',customStickers:service.customStickers(),speechAvailable:false,voices:[]}};},
+  async bootstrap(){capabilities=await native.rpc('capabilities');const proactiveStatus=await proactive.refresh();return {state:store.getPublic(),plugins:plugins.getPublic(),runtime:{version:APP_VERSION,platform:'android',capabilities:{...capabilities,proactive:proactiveStatus.supported},proactive:proactiveStatus,dataDirectory:'Android 应用私有加密资料',customStickers:service.customStickers(),speechAvailable:false,voices:[]}};},
+  proactiveStatus:()=>proactive.status(),proactiveConfigure:input=>proactive.configure(input),proactiveCheck:()=>proactive.check(),proactiveOpenSettings:()=>proactive.openSettings(),proactiveOpenPending:()=>proactive.openPending(),
   managedCatalog:()=>managed.catalog(),managedUsage:()=>managed.usage(),async managedConnect(input){const result=await managed.connect(input);revoke();changed();return result;},
   saveProvider(input){const old=store.getPublic().providers.find(p=>p.id===input?.id);encryptEndpoint=input?.baseUrl??old?.baseUrl??'';try{encryptEndpoint=new URL(encryptEndpoint).href.replace(/\/+$/,'');}catch{}const result=store.saveProvider(input);revoke();changed();return result;},
   send:async input=>{const result=await harness.send({...input,attachments:media.validated(input?.attachments??[])});const c=store.getConversation(input.conversationId);if(c?.agentId)plugins.recordActivity({agentId:c.agentId});changed();return result;},
@@ -83,15 +85,15 @@ function installMobileBridge({host,fetcher=nativeFetch}={}){
   studioExport:input=>saveJson('哦鲸鲸内容包-'+Date.now()+'.json',service.exportBundle(input?.projectId)),
   async studioImport(){const file=await native.rpc('pickJson');if(!file)return null;const p=service.importBundle(JSON.parse(file.text));changed();return p;},
   async studioImportNovel(){const file=await native.rpc('pickNovel');if(!file)return null;const result=knowledge.importText({title:file.name,text:file.text,source:file.source});return {...result,originalArchive:file.originalArchive};},
-  onEvent(listener){listeners.add(listener);return()=>listeners.delete(listener);},setCloseHandler(callback){if(typeof callback==='function')closeHandler=callback;}
+  onEvent(listener){listeners.add(listener);proactive.listenerReady();return()=>listeners.delete(listener);},setCloseHandler(callback){if(typeof callback==='function')closeHandler=callback;}
  };
  for(const method of ['saveAgent','createConversation','setConversation','updateSettings','saveDraft'])methods[method]=input=>{const result=store[method](input);changed();return result;};
- for(const [method,member]of Object.entries(FRIENDS_METHODS))methods[method]=input=>friends[member](input);
+ for(const [method,member]of Object.entries(FRIENDS_METHODS))methods[method]=async input=>{const result=await friends[member](input);if(method==='friendsEnable')changed();return result;};
  for(const [name,method]of Object.entries({studioCreate:'createProject',studioRename:'renameProject',studioSaveEntry:'saveEntry',studioCopyEntry:'copyEntry',studioRollback:'rollback',studioApply:'applyProposal'}))methods[name]=input=>studio[method](input);
  for(const [name,method]of Object.entries({studioSeed:'seed',studioActivate:'activate',studioAsk:'ask',studioNovelPersona:'novelPersona',studioDraftSave:'draftSave',studioDraftList:'draftList',studioDraftRemove:'draftRemove'}))methods[name]=input=>service[method](input);
  const bridge={};for(const [name,fn]of Object.entries(methods))bridge[name]=['onEvent','setCloseHandler'].includes(name)?fn:(input)=>Promise.resolve().then(()=>fn(input));
  globalThis.ly=bridge;globalThis.__ohwhaleClose=async()=>{try{await closeHandler();revoke();for(const c of store.getPublic().conversations)harness.cancel(c.id);await native.rpc('finish');}catch(e){emit({type:'error',text:e.message});}};
- const timer=setInterval(async()=>{if(greetingBusy||globalThis.document?.visibilityState==='hidden'||!plugins.getPublic().settings.proactive)return;const now=new Date(),hour=now.getHours(),day=now.toLocaleDateString('sv-SE'),s=store.getPublic(),q=s.settings.quietHours;if(q?.enabled&&(q.start<q.end?hour>=q.start&&hour<q.end:hour>=q.start||hour<q.end))return;greetingBusy=true;try{for(const agent of s.agents){if(!agent.greeting.enabled||agent.greeting.hour!==hour||s.greetings[agent.id]===day||!agent.providerId)continue;const c=s.conversations.find(c=>c.agentId===agent.id&&c.type==='ai'&&!c.archived);if(!c)continue;store.markGreeting(agent.id,day);try{await harness.send({conversationId:c.id,greeting:true});}catch{}}}finally{greetingBusy=false;}},60000);
- return {bridge,store,studio,plugins,knowledge,service,harness,media,dispose(){clearInterval(timer);voiceSession.stop();revoke();for(const c of store.getPublic().conversations)harness.cancel(c.id);}};
+ proactive=createMobileProactive({native,store,plugins,harness,friends,emit,onState:changed});
+ return {bridge,store,studio,plugins,knowledge,service,harness,media,proactive,dispose(){proactive.dispose();voiceSession.stop();revoke();for(const c of store.getPublic().conversations)harness.cancel(c.id);}};
 }
 module.exports={installMobileBridge};
