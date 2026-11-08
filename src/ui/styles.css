@@ -66,3 +66,5 @@ body{background:#edf3fb}.app-shell{padding:0 10px 10px;background:radial-gradien
 .proactive-panel>.fine-print{line-height:1.9;margin-top:12px}.proactive-panel>.fine-print svg{vertical-align:middle;margin-right:4px}.proactive-error{font-size:12px;line-height:1.8;color:#956348}
 .proactive-status-list article{display:flex;gap:12px;justify-content:space-between;border-top:1px solid #dfebf5;padding:12px 0;font-size:12px}.proactive-status-list article>div{min-width:0;overflow-wrap:anywhere}.proactive-status-list article>div:last-child{text-align:right}.proactive-status-list small{display:block;color:#879aab;line-height:1.8;margin-top:3px}.proactive-status-heading .text-button{margin:0}
 @media(max-width:700px){.proactive-panel{padding:14px}.proactive-actions .primary-button{width:100%;justify-content:center}.proactive-status-list article{gap:8px}.proactive-panel .check-label{font-size:12px}}
+/* Four desktop destinations keep their short labels on a single line. */
+@media(min-width:701px){.desktop-primary-nav{gap:2px}.desktop-primary-nav>button{gap:5px;padding:9px 5px}.desktop-primary-nav>button svg{flex-shrink:0}.desktop-primary-nav .rail-label{white-space:nowrap}}
