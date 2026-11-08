@@ -12,7 +12,7 @@ const {runSpeech}=require('./core/speech.cjs');
 const {VoiceSession,speechText}=require('./core/voice-session.cjs');
 const {exportRoleCard,importRoleCard,MAX_CARD_BYTES}=require('./core/role-card.cjs');
 const {ShareManager}=require('./core/sharing.cjs');
-const {dueGreetings,localDay}=require('./core/scheduler.cjs');
+const {ProactiveService}=require('./core/proactive.cjs');
 const {PluginStore}=require('./core/plugins.cjs');
 const {StudioStore}=require('./core/studio.cjs');
 const {KnowledgeStore}=require('./core/knowledge.cjs');
@@ -23,7 +23,7 @@ app.setName('OhWhale');
 configureDataLocation(app);
 protocol.registerSchemesAsPrivileged([{scheme:'lingyu-media',privileges:{standard:true,secure:true,supportFetchAPI:true,stream:true,corsEnabled:true}}]);
 if(!app.requestSingleInstanceLock())app.exit(0);
-let win,store,media,harness,sharing,plugins,studio,knowledge,studioService,friends,managed,speechInfo={recognition:false,voices:[]},closing=false,closeCommitted=false,closeTimer,greetingTimer,greetingBusy=false;
+let win,store,media,harness,sharing,plugins,studio,knowledge,studioService,friends,managed,speechInfo={recognition:false,voices:[]},closing=false,closeCommitted=false,closeTimer,greetingTimer,proactive;
 const generationJobs=new Set();
 const voiceSession=new VoiceSession();
 const uiURL=pathToFileURL(path.join(__dirname,'ui/index.html')).href;
@@ -38,6 +38,10 @@ function installBridge(){
  for(const [method,member]of Object.entries(FRIENDS_METHODS))bind(method,input=>friends[member](input));
  bind('managedCatalog',()=>managed.catalog());bind('managedUsage',()=>managed.usage());bind('managedConnect',async input=>{const result=await managed.connect(input);sharing.revokeAll();await sharing.stopAPI();stateChanged();return result;});
  bind('closeReady',async input=>{if(!closing)return false;clearTimeout(closeTimer);closing=false;if(input?.ok){closeCommitted=true;sharing.revokeAll();await sharing.stopAPI();for(const c of store.getPublic().conversations)harness.cancel(c.id);setImmediate(()=>win.close());return true;}dialog.showErrorBox('草稿尚未保存','窗口保持打开，请检查存储空间后重试。');return false;});
+ bind('proactiveStatus',()=>({...proactive.status(),supported:true,backgroundEnabled:false,platform:'windows',notificationsAllowed:Notification.isSupported()}));
+ bind('proactiveCheck',async()=>{await proactive.tick();return {...proactive.status(),supported:true,backgroundEnabled:false,platform:'windows',notificationsAllowed:Notification.isSupported()};});
+ bind('proactiveConfigure',()=>{throw Error('电脑上保持哦鲸鲸运行或最小化，就能收到问候；退出后会暂停。');});
+ bind('proactiveOpenSettings',()=>({supported:false}));
  bind('bootstrap',()=>({state:store.getPublic(),plugins:plugins.getPublic(),runtime:{version:app.getVersion(),platform:'windows',capabilities:{transcribe:speechInfo.recognition,nativeRecognize:false,saveRecording:true},dataDirectory:app.getPath('userData'),customStickers:studioService.customStickers(),speechAvailable:speechInfo.recognition,voices:speechInfo.voices}}));
  for(const method of ['saveAgent','createConversation','setConversation','updateSettings','saveDraft'])bind(method,input=>{const r=store[method](input);stateChanged();return r;});
  bind('saveProvider',async input=>{const r=store.saveProvider(input);sharing.revokeAll();await sharing.stopAPI();stateChanged();return r;});
@@ -96,11 +100,7 @@ function installBridge(){
  });
 }
 async function generateFor(agentId,fn){if(generationJobs.has(agentId))throw Error('这个角色正在创作，请稍后再试');generationJobs.add(agentId);try{return await fn();}finally{generationJobs.delete(agentId);}}
-async function checkGreetings(now=new Date()){
- if(greetingBusy||!store||!plugins.getPublic().settings.proactive)return;const a=dueGreetings(store.getPublic(),now)[0];if(!a)return;greetingBusy=true;
- try{store.markGreeting(a.id,localDay(now));const existing=store.getPublic().conversations.find(c=>c.type==='ai'&&c.agentId===a.id&&!c.archived);const c=existing||store.createConversation({agentId:a.id,type:'ai'});await harness.send({conversationId:c.id,greeting:true,text:''});if(Notification.isSupported()&&!win.isFocused())new Notification({title:`${a.name} · 主动问候`,body:'有一条新的问候消息。',silent:true}).show();}
- catch{emit({type:'notice',text:'本次主动问候未完成，可在会话中检查接口状态。今天不会自动重复调用。'});}finally{greetingBusy=false;}
-}
+async function checkGreetings(now=new Date()){try{return await proactive?.tick(now);}catch{emit({type:'notice',text:'这次问候还没送到，稍后会在次数上限内再试。'});}}
 app.on('second-instance',()=>{if(win){if(win.isMinimized())win.restore();win.show();win.focus();}});
 app.whenReady().then(async()=>{
  const dir=app.getPath('userData');fs.mkdirSync(dir,{recursive:true});
@@ -110,6 +110,11 @@ app.whenReady().then(async()=>{
  media=new MediaStore({dir,nativeImage});
  plugins=new PluginStore({dir,validateAgent:agentById,validateAttachments:a=>media.validated(a)});
  harness=new Harness({store,managedRequest:input=>managed.request(input),fetch:(...args)=>net.fetch(...args),resolveImage:a=>media.resolve(a.id),onEvent:emit,contextForAgent:id=>{const p=plugins.getPublic();return [p.settings.stickers?'可偶尔用一个表情标记：[sticker:rice]开饭、[sticker:hello]招呼、[sticker:hug]安慰、[sticker:think]思考、[sticker:cheer]加油、[sticker:sleep]晚安；不必每条都使用。':'',plugins.contextForAgent(id)].filter(Boolean).join('\n').slice(0,4000);},log:record=>fs.appendFileSync(path.join(dir,'api-usage.jsonl'),JSON.stringify(record)+'\n')});
+ proactive=new ProactiveService({dir,store,harness,plugins,onChange:stateChanged,onNotify:result=>{
+   if(!Notification.isSupported()||!win||win.isDestroyed()||win.isFocused())return;
+   const a=store.getPublic().agents.find(a=>a.id===result.agentId);const note=new Notification({title:`${a?.name||'小鲸'}来找你啦`,body:'给你留了一条小小的问候，点开看看吧。',silent:true});
+   note.on('click',()=>{if(!win||win.isDestroyed())return;if(win.isMinimized())win.restore();win.show();win.focus();emit({type:'open-conversation',conversationId:result.conversationId});});note.show();
+ }});
  sharing=new ShareManager({reply:input=>harness.replyExternal(input),validateAgent:validateSharedAgent});
  studio=new StudioStore({dir,validateAttachment:a=>{const v=media.validated([a])[0];if(v.type!=='image')throw Error('素材须为图片');return v;}});
  knowledge=new KnowledgeStore({dir});
@@ -124,5 +129,5 @@ app.whenReady().then(async()=>{
  installBridge();installStudioBridge({bind,studio,service:studioService,knowledge,dialog,win,exportJSON});await win.loadURL(uiURL);runSpeech('info').then(info=>{speechInfo=info;stateChanged();}).catch(()=>{});
  greetingTimer=setInterval(()=>checkGreetings(),60000);setTimeout(()=>checkGreetings(),20000);
 }).catch(error=>{dialog.showErrorBox('哦鲸鲸未能启动',error.message);app.quit();});
-app.on('window-all-closed',()=>{clearInterval(greetingTimer);app.quit();});
-app.on('before-quit',()=>{clearInterval(greetingTimer);voiceSession.stop();sharing?.revokeAll();});
+app.on('window-all-closed',()=>{clearInterval(greetingTimer);proactive?.dispose();app.quit();});
+app.on('before-quit',()=>{clearInterval(greetingTimer);proactive?.dispose();voiceSession.stop();sharing?.revokeAll();});

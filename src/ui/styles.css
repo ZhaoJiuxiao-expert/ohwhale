@@ -58,3 +58,11 @@ body{background:#edf3fb}.app-shell{padding:0 10px 10px;background:radial-gradien
 @media(max-width:700px){.chat-image-preview{padding:16px}.persona-edit-heading{align-items:center}}
 
 @media(max-width:700px){.sticker-library-preview .sticker-original{height:145px}.sticker-library-preview .sticker-original img{max-height:131px}.sticker-library-preview>.primary-button{position:sticky;bottom:0;z-index:2;box-shadow:0 0 0 7px #fbfdff,0 -5px 15px #eef4fa}}
+
+.proactive-panel{border:1px solid #dce9f5;background:#f7fbff;border-radius:15px;padding:18px;margin:20px 0;color:#476581}
+.proactive-panel>header{display:flex;gap:10px;align-items:flex-start}.proactive-panel>header h3{margin:0 0 5px!important;font-size:15px}.proactive-panel>header p{font-size:12px;color:#8097ab;line-height:1.7}
+.proactive-description{font-size:13px;line-height:1.9;margin:14px 0}.proactive-background-state,.proactive-status-heading{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:15px 0;font-size:13px}.proactive-background-state>span{font-size:12px;color:#8097ab}
+.proactive-consent{line-height:1.8!important;align-items:flex-start!important}.proactive-consent input{margin-top:5px;flex-shrink:0}.proactive-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:15px 0}
+.proactive-panel>.fine-print{line-height:1.9;margin-top:12px}.proactive-panel>.fine-print svg{vertical-align:middle;margin-right:4px}.proactive-error{font-size:12px;line-height:1.8;color:#956348}
+.proactive-status-list article{display:flex;gap:12px;justify-content:space-between;border-top:1px solid #dfebf5;padding:12px 0;font-size:12px}.proactive-status-list article>div{min-width:0;overflow-wrap:anywhere}.proactive-status-list article>div:last-child{text-align:right}.proactive-status-list small{display:block;color:#879aab;line-height:1.8;margin-top:3px}.proactive-status-heading .text-button{margin:0}
+@media(max-width:700px){.proactive-panel{padding:14px}.proactive-actions .primary-button{width:100%;justify-content:center}.proactive-status-list article{gap:8px}.proactive-panel .check-label{font-size:12px}}

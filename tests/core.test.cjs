@@ -13,6 +13,17 @@ test('initial store is empty, has eight fictional cards and no prefilled convers
   const {store}=fixture();const state=store.getPublic();assert.equal(state.schema,1);assert.equal(state.agents.length,8);assert.deepEqual(state.conversations,[]);assert.deepEqual(state.messages,{});assert.equal(state.providers[0].id,'atlas');assert.equal(state.providers[0].hasKey,false);assert.equal(state.providers[0].vision,false);assert.equal(state.agents[0].avatar,'assets/deepseek-avatar.png');assert.ok(state.agents.every(a=>!a.memory&&!a.greeting.enabled));
   state.agents[0].name='mutated';assert.notEqual(store.getPublic().agents[0].name,'mutated');
 });
+test('legacy greeting settings remain readable while new cadence and background preference survive restart',()=>{
+ const {store,args}=fixture();
+ store.saveAgent({id:'deepseek',greeting:{enabled:true,hour:9}});
+ assert.equal(store.getPublic().agents[0].greeting.mode,'daily');
+ assert.throws(()=>store.saveAgent({id:'deepseek',greeting:{enabled:true,hour:9,mode:'always'}}),/问候节奏/);
+ store.saveAgent({id:'deepseek',greeting:{enabled:true,hour:9,mode:'natural'}});
+ assert.throws(()=>store.updateSettings({proactive:{background:'yes'}}),/开关值/);
+ assert.throws(()=>store.updateSettings({proactive:{background:true,secret:'not-allowed'}}));
+ store.updateSettings({proactive:{background:true}});
+ const restored=new ChatStore(args).getPublic();assert.equal(restored.agents[0].greeting.mode,'natural');assert.equal(restored.settings.proactive.background,true);
+});
 test('snapshots are append-only, restart restores history and only ciphertext is persisted',()=>{
   const {store,args,dir}=fixture();const initial=fs.readdirSync(dir);const old=fs.readFileSync(path.join(dir,initial[0]),'utf8');
   const result=store.saveProvider(p);assert.equal(result.hasKey,true);assert.equal(result.apiKey,undefined);assert.equal(result.encryptedApiKey,undefined);
