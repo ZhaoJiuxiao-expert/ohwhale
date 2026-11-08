@@ -1,0 +1,42 @@
+# Groups v1 implementation contract (1.5.0)
+
+New group chats use the existing authenticated friend identity and HTTPS server. They are cloud group chats, NOT the existing one-to-one WebRTC transport, and NOT end-to-end encrypted. Explicit create/join consent states that group content is stored on the service, visible to members and sent to a selected AI provider when someone asks that AI to reply. At rest the group journal/assets are authenticated encrypted using a private local server key. No private one-to-one history, memory, API keys or model bindings are exported in a group role card.
+
+## JSON API
+
+All POST `/v1/groups/<route>` with existing device Bearer credential. Strict schemas, 32hex server IDs, bounded text and lists. Names max 80 characters, descriptions max 2000, message/reply text max 12000, model labels max 120. Transport errors use `{error:{code,message}}` as existing service. Store is independent under GROUPS_DATA_DIR, opt-in deployment. Group states and message author/role/permissions are server-authoritative.
+
+- `overview {}` -> `{self,groups:[groupSummary],invitations:[invitation]}`.
+- `create {name,description,consent:true}` -> `{group}`.
+- `get {groupId,afterSeq?,beforeSeq?}` -> `{group,messages,hasMore,latestSeq}`; newest page by default, ascending messages. Unauthorized/removed users cannot read. Paginate up to 50 messages. Respect historyVisible/join sequence.
+- `send {groupId,clientId,text,replyTo?,mentions:[],attachments:[]}` -> `{message}`. clientId UUID/idempotent within sender+group; mismatched reuse rejected. mentions are bot IDs, max settings.maxAIReplies (1–3); no automatic bot-to-bot triggering. Empty text allowed only with attachment.
+- `invite {groupId,friendId}` -> `{ok:true}`; mutually accepted friends, adds pending invitation, not membership.
+- `respond-invite {invitationId,accept,consent?}` -> `{ok:true,groupId?}`; accept requires consent.
+- `create-invite {groupId}` -> `{code,expiresAt}`; opaque `JG-` plus 43 base64url characters code/QR `ohwhale:group:v1:<code>`, random high entropy, 7 days, max 50 uses, revocable. `revoke-invite {groupId}` -> `{ok:true}`.
+- `join {code,consent:true}` -> `{status:'joined'|'pending',groupId}`. joinApproval default true; banned users rejected.
+- `manage {groupId,action,...}` -> `{group}`. Actions: `update` {name?,description?,settings?}; `member` {memberId,role?,mutedUntil?}; `remove-member` {memberId,ban:boolean}; `unban` {memberId}; `approve` {memberId,accept:boolean}; `pin` {messageId:null|string}; `delete-message` {messageId}; `transfer` {memberId}; `leave`; `close`; `agent` {botId,enabled?,remove?}. Owner only promotion/demotion/transfer/close; admins never moderate owner or other admin. Granular admin rights `{changeInfo,inviteMembers,manageMembers,deleteMessages,pinMessages,manageAgents}`; member action may include rights (owner only).
+- `add-agent {groupId,name,persona,consent:true}` -> `{group,botId}`; caller is bot host and must have manageAgents capability. Shared persona max 12000, no private memory/model/key. max 8 bots.
+- `tasks {}` -> `{tasks:[{groupId,taskId,botId}]}` for caller-hosted bots only. `claim {groupId,taskId}` -> `{task:{id,botId,leaseToken,expiresAt},agent,group,messages}`. A task can only be claimed once; expiry/manual re-mention is safer than automatic rebilling. Context only group text visible to host, <= triggering seq. `complete {groupId,taskId,leaseToken,text,model}` -> `{message}`. `fail {groupId,taskId,leaseToken}` -> `{ok:true}`. Verify current host membership and bot enable state at completion. Keep raw key off server. No LLM call on server in this feature.
+- `asset {groupId,assetId}` -> `{dataUrl}`. Upload attachments inline only on send `{type:'image'|'audio',mime,name,dataBase64}` with bounded decoded bytes (512KiB/image, 1MiB/audio; 2 attachments; total request <=3MiB), strict magic/MIME, private encrypted asset storage. The v1 local media bridge produces image PNG/JPEG/WebP/GIF and PCM WAV recordings; the server also accepts bounded audio Ogg/WebM/MPEG/MP4 with matching magic. Returned message attachment metadata `{id,type,mime,name,bytes}` only; members fetch individually. No arbitrary remote URLs/files.
+
+## State shapes
+
+groupSummary `{id,name,description,memberCount,agentCount,latestSeq,updatedAt,closed}`.
+
+group includes summary fields plus `{ownerId,createdAt,settings,members,agents,joinRequests,banned,pinnedMessageId}` (requests and banned visible to moderators only). settings `{sendMessages:true,sendMedia:true,inviteMembers:false,slowModeSeconds:0,joinApproval:true,historyVisible:true,maxAIReplies:2}`. slowModeSeconds integer 0..3600. members `{id,name,role:'owner'|'admin'|'member',rights,mutedUntil,joinedAt}`. agents `{id,name,persona,hostId,enabled}`. invitation `{id,groupId,groupName,from:{id,name},createdAt}`.
+
+message `{id,seq,groupId,senderId,senderName,senderType:'human'|'ai'|'system',text,createdAt,replyTo:null|string,mentions:[],attachments:[],deleted:boolean,model?}`. timestamps are milliseconds. Client IDs accepted as 1..100 safe alnum/dash/underscore. Tombstones hide text/assets but retain the original encrypted journal; no physical file deletion.
+
+## Privileged client bridge
+
+`groupsStatus`, `groupsOverview`, `groupsCreate`, `groupsGet`, `groupsSend`, `groupsInvite`, `groupsRespondInvite`, `groupsCreateInvite`, `groupsRevokeInvite`, `groupsJoin`, `groupsManage`, `groupsAddAgent`, `groupsAsset`.
+
+Client `groupsAddAgent({groupId,agentId,consent:true})` resolves local persona and saves private bot->local-agent binding; the provider key and private memory never reach group server. Other bridge inputs mirror routes. `groupsSend` accepts existing local attachment references, resolves media privately into upload bytes. `groupsAsset` returns dataUrl. Group service checks hosted tasks periodically only while app is running/foreground, one generation at a time using configured LLM and a neutral group framing plus this bot's persona; explicit @ only, no user private memory/history/plugins. Results have real server author identity; claim before model spending, no automatic retries. Errors emit `{type:'groups-notice',text}`; relevant changes emit `{type:'groups-changed'}`. Completed AI text is first saved in a privileged append-only encrypted outbox; a lost completion response only retries the exact task/lease/text/model before lease expiry, never regenerates. Server completion is idempotent for that payload and checks current permission even for replay. Expired outbox entries require a manual new mention. Native Android foreground-only model requests are cancelled on pause; proactive background requests keep their existing behavior. Hosting with no local bot binding does not poll tasks; service errors back off and identical notices are limited to once per minute. No new ChatStore conversation schema; separate workspace integrates list and unread/read cursors locally via group client if needed.
+
+## UI integration
+
+`GroupWorkspace` props `{state,runtime,run,toast,onOpenFriends,onClose}` renders group list/chat/create/join/manage, invited friends, role selector and attachments. Uses window.ly group methods. Own CSS class prefix `group-`. Compact layout has back navigation; desktop has list+chat. Friendly clear Chinese labels; explicit privacy/AI hosting allowance at create/join/add-agent, no fake activity. Root mounts through top toolbar/mobile plus menu and account navigation. AI response requires the host's app to stay open; communicate this before adding an AI.
+
+## Evidence and limits
+
+Default 32 humans/group, 8 bots, 50 groups/service; identities must be existing registered users. Rate limits plus bounded encrypted append events and explicit storage-full error. Tests use isolated synthetic identities and mock/local LLM, no real user data. Test permissions via HTTP, not only direct store calls; three clients, 2 personas, retries/idempotence, joins/bans/revocation, slow mode, claim races, removal before complete, restart, no secret leakage. Reference behaviors: https://core.telegram.org/api/rights and https://telegram.org/tour/groups (feature reference, no Telegram compatibility claim).

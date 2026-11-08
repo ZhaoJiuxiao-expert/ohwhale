@@ -5,10 +5,11 @@ const fs=require('./fs.cjs');
 const path=require('./path.cjs');
 const crypto=require('./crypto.cjs');
 const {nativeFetch}=require('./fetch.cjs');
-const {friendsFetch,managedFetch}=require('./friends-fetch.cjs');
+const {friendsFetch,managedFetch,groupsFetch}=require('./friends-fetch.cjs');
 const {ManagedClient}=require('../core/managed-client.cjs');
 const {createMobileProactive}=require('./proactive.cjs');
 const {FriendsClient,FRIENDS_METHODS}=require('../core/friends-client.cjs');
+const {GroupsClient,GROUPS_METHODS}=require('../core/groups-client.cjs');
 const {ChatStore,validateAttachments}=require('../core/store.cjs');
 const {Harness}=require('../core/harness.cjs');
 const {speechText,VoiceSession}=require('../core/voice-session.cjs');
@@ -40,6 +41,11 @@ function installMobileBridge({host,fetcher=nativeFetch}={}){
  const agentById=id=>{const agent=store.getPublic().agents.find(a=>a.id===id);if(!agent)throw Error('这位角色暂时没找到，请重新选择。');return agent;};
  const plugins=new PluginStore({dir:path.join(dir,'plugins'),validateAgent:agentById,validateAttachments:a=>media.validated(a)});
  const harness=new Harness({store,managedRequest:input=>managed.request(input),fetch:fetcher,resolveImage:a=>media.resolve(a.id),onEvent:event=>{emit(event);if(event.type==='state')proactive?.scheduleSync();},contextForAgent:id=>{const state=plugins.getPublic();return [state.settings.stickers?'可以偶尔用一个表情标记：[sticker:rice]开饭、[sticker:hello]招呼、[sticker:hug]安慰、[sticker:think]思考、[sticker:cheer]加油、[sticker:sleep]晚安；不必每条都使用。':'',plugins.contextForAgent(id)].filter(Boolean).join('\n').slice(0,4000);},log:event=>fs.appendFileSync(path.join(dir,'api-usage.jsonl'),JSON.stringify(event)+'\n')});
+ const groupManaged=new ManagedClient({store,friends,fetch:(url,options)=>managedFetch(url,{...options,foregroundOnly:true})});
+ const groupHarness=new Harness({store,managedRequest:input=>groupManaged.request(input),fetch:(url,options)=>fetcher(url,{...options,foregroundOnly:true})});
+ const groups=new GroupsClient({dir:path.join(dir,'groups'),friends,store,harness:groupHarness,media,fetch:groupsFetch,onEvent:emit,encryptedFileSystem:true});
+ const groupLifecycle=native.subscribe(event=>{if(event.type==='app-foreground')groups.setForeground(event.foreground===true);});
+ const visibility=()=>groups.setForeground(!globalThis.document?.hidden);globalThis.document?.addEventListener('visibilitychange',visibility);groups.start();
  const studio=new StudioStore({dir,validateAttachment:a=>{const saved=media.validated([a])[0];if(saved.type!=='image')throw Error('请为内容选择一张图片。');return saved;}});
  const sharedSources=new Set(['src/core/store.cjs','src/core/harness.cjs','src/core/plugins.cjs','src/core/studio.cjs','src/core/knowledge.cjs','src/core/studio-service.cjs','src/core/role-card.cjs']);
  const mobileSources=knowledgeSources.filter(s=>sharedSources.has(s.source)||/^https:\/\//.test(s.source));
@@ -88,12 +94,13 @@ function installMobileBridge({host,fetcher=nativeFetch}={}){
   onEvent(listener){listeners.add(listener);proactive.listenerReady();return()=>listeners.delete(listener);},setCloseHandler(callback){if(typeof callback==='function')closeHandler=callback;}
  };
  for(const method of ['saveAgent','createConversation','setConversation','updateSettings','saveDraft'])methods[method]=input=>{const result=store[method](input);changed();return result;};
+ for(const [method,member]of Object.entries(GROUPS_METHODS))methods[method]=input=>groups[member](input);
  for(const [method,member]of Object.entries(FRIENDS_METHODS))methods[method]=async input=>{const result=await friends[member](input);if(method==='friendsEnable')changed();return result;};
  for(const [name,method]of Object.entries({studioCreate:'createProject',studioRename:'renameProject',studioSaveEntry:'saveEntry',studioCopyEntry:'copyEntry',studioRollback:'rollback',studioApply:'applyProposal'}))methods[name]=input=>studio[method](input);
  for(const [name,method]of Object.entries({studioSeed:'seed',studioActivate:'activate',studioAsk:'ask',studioNovelPersona:'novelPersona',studioDraftSave:'draftSave',studioDraftList:'draftList',studioDraftRemove:'draftRemove'}))methods[name]=input=>service[method](input);
  const bridge={};for(const [name,fn]of Object.entries(methods))bridge[name]=['onEvent','setCloseHandler'].includes(name)?fn:(input)=>Promise.resolve().then(()=>fn(input));
- globalThis.ly=bridge;globalThis.__ohwhaleClose=async()=>{try{await closeHandler();revoke();for(const c of store.getPublic().conversations)harness.cancel(c.id);await native.rpc('finish');}catch(e){emit({type:'error',text:e.message});}};
+ globalThis.ly=bridge;globalThis.__ohwhaleClose=async()=>{try{await closeHandler();groups.dispose();revoke();for(const c of store.getPublic().conversations)harness.cancel(c.id);await native.rpc('finish');}catch(e){emit({type:'error',text:e.message});}};
  proactive=createMobileProactive({native,store,plugins,harness,friends,emit,onState:changed});
- return {bridge,store,studio,plugins,knowledge,service,harness,media,proactive,dispose(){proactive.dispose();voiceSession.stop();revoke();for(const c of store.getPublic().conversations)harness.cancel(c.id);}};
+ return {bridge,store,studio,plugins,knowledge,service,harness,media,proactive,groups,dispose(){groups.dispose();groupLifecycle();globalThis.document?.removeEventListener('visibilitychange',visibility);proactive.dispose();voiceSession.stop();revoke();for(const c of store.getPublic().conversations)harness.cancel(c.id);}};
 }
 module.exports={installMobileBridge};
