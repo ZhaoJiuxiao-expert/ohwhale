@@ -15,6 +15,20 @@ function fixture(options={}){
  return {dir,store,storeArgs,friends,friendArgs,managed,harness,requests,logs,events,byok:()=>byok};
 }
 const connect=x=>x.managed.connect({agentId:'deepseek',model:MODEL,consent:true});
+test('managed proactive generation uses 512 tokens and keeps its result outside chat until reviewed',async()=>{
+ const x=fixture();await connect(x);const c=x.store.createConversation({agentId:'deepseek'});
+ const result=await x.harness.generateGreeting({conversationId:c.id,greetingContext:'请发一条自然的主动问候。'});
+ assert.equal(result.text,'托管实际测试回复');assert.equal(x.store.getMessages(c.id).length,0);assert.equal(x.events.length,0);
+ const body=JSON.parse(x.requests.at(-1).input.body);assert.equal(body.max_tokens,512);
+ const provider=x.store.getProvider(x.store.getPublic().agents.find(a=>a.id==='deepseek').providerId),count=x.requests.length;
+ for(const maxTokens of [0,-1,1.5,4097,'512'])await assert.rejects(x.managed.request({provider,messages:[{role:'user',content:'test'}],maxTokens}),/输出长度/);
+ assert.equal(x.requests.length,count);
+ await x.managed.request({provider,messages:[{role:'user',content:'普通消息'}]});assert.equal(JSON.parse(x.requests.at(-1).input.body).max_tokens,4096);
+});
+test('managed unknown upstream error code still preserves HTTP 429 for proactive backoff',async()=>{
+ const x=fixture({chat:()=>new Response(JSON.stringify({error:{code:'UNKNOWN_RATE_FIXTURE'}}),{status:429})});await connect(x);const c=x.store.createConversation({agentId:'deepseek'});
+ await assert.rejects(x.harness.generateGreeting({conversationId:c.id,greetingContext:'请发一条自然的问候。'}),error=>error.status===429&&error.code==='FRIENDS_HTTP');assert.equal(x.store.getMessages(c.id).length,0);
+});
 test('managed catalog is public and opt-in is required before registering or rebinding a role',async()=>{
  const x=fixture();assert.deepEqual(await x.managed.catalog(),CATALOG);assert.equal(x.friends.status().enabled,false);assert.equal(x.requests[0].input.headers.Authorization,undefined);
  await assert.rejects(x.managed.connect({agentId:'deepseek',model:MODEL,consent:false}),/确认/);assert.equal(x.requests.length,1);
@@ -35,7 +49,7 @@ test('managed Harness uses role and confirmed memory through device-auth route, 
  for(const value of [TOKEN,'OWNER_CONFIRMED_PRIVATE','PLUGIN_CONFIRMED_PRIVATE','用户这次愿意发送的文字'])assert.ok(!JSON.stringify(x.logs).includes(value));
 });
 test('managed quota failure preserves question and failed reply without automatic retry or BYOK fallback',async()=>{
- const x=fixture({chat:()=>new Response(JSON.stringify({error:{code:'USER_DAILY_LIMIT',message:'SECRET_UPSTREAM_DETAIL'}}),{status:429})});await connect(x);const c=x.store.createConversation({agentId:'deepseek',type:'ai'});await assert.rejects(x.harness.send({conversationId:c.id,text:'请保留我的问题'}),e=>e.code==='USER_DAILY_LIMIT'&&/UTC/.test(e.message)&&!e.message.includes('SECRET_UPSTREAM_DETAIL'));
+ const x=fixture({chat:()=>new Response(JSON.stringify({error:{code:'USER_DAILY_LIMIT',message:'SECRET_UPSTREAM_DETAIL'}}),{status:429})});await connect(x);const c=x.store.createConversation({agentId:'deepseek',type:'ai'});await assert.rejects(x.harness.send({conversationId:c.id,text:'请保留我的问题'}),e=>e.code==='USER_DAILY_LIMIT'&&e.status===429&&/UTC/.test(e.message)&&!e.message.includes('SECRET_UPSTREAM_DETAIL'));
  const history=x.store.getMessages(c.id);assert.equal(history[0].text,'请保留我的问题');assert.equal(history[1].status,'failed');assert.equal(x.requests.filter(r=>r.url.endsWith('/chat/completions')).length,1);assert.equal(x.byok(),0);
 });
 test('managed cancellation aborts the native-compatible fetch and retains user text with cancelled status',async()=>{

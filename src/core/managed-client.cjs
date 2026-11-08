@@ -18,9 +18,10 @@ class ManagedClient{
   if(!this.friends.status().enabled){const display=current.settings.displayName;const name=typeof display==='string'&&display!=='我'&&display.trim()&&display.length<=60&&!/[\x00-\x1f\x7f/\\:]/.test(display)&&!display.includes('..')?display.trim():'一位鲸友';await this.friends.enable({name,consent:true});}
   if(this.store.managedBase!==this.friends.serverUrl+'/v1/managed')throw Error('托管服务与本机身份不在同一站点，已停止连接。');return this.store.bindManagedProvider({agentId:input.agentId,model:selected.id,name:'小鲸托管 · '+selected.name.slice(0,70),vision:selected.vision,consent:true});
  }
- async request({provider,messages,signal}){
+ async request({provider,messages,signal,maxTokens=4096}){
   abort(signal);if(provider?.managed!==true||provider.consent!==true||provider.baseUrl!==this.friends.serverUrl+'/v1/managed'||Object.hasOwn(provider,'apiKey')||Object.hasOwn(provider,'encryptedApiKey'))throw Error('这份托管连接配置不完整，请重新连接角色。');
-  text(provider.model,200);if(!Array.isArray(messages)||messages.length<1||messages.length>25)throw Error('这段上下文有点长，请新建聊天后再试。');const body={model:provider.model,messages,stream:false,max_tokens:4096};if(new TextEncoder().encode(JSON.stringify(body)).byteLength>8*1024*1024)throw Error('这次图片和文字有点多，请缩小图片后再试。');
+  if(!Number.isSafeInteger(maxTokens)||maxTokens<1||maxTokens>4096)throw Error('这次回复的输出长度配置无效，请使用1至4096之间的整数。');
+  text(provider.model,200);if(!Array.isArray(messages)||messages.length<1||messages.length>25)throw Error('这段上下文有点长，请新建聊天后再试。');const body={model:provider.model,messages,stream:false,max_tokens:maxTokens};if(new TextEncoder().encode(JSON.stringify(body)).byteLength>8*1024*1024)throw Error('这次图片和文字有点多，请缩小图片后再试。');
   const r=await this._request('chat/completions',{body,signal});abort(signal);obj(r,['choices','usage']);if(!Array.isArray(r.choices)||r.choices.length!==1)throw Error('模型回复结构不完整，请稍后手动重试。');const c=r.choices[0];obj(c,['index','message','finish_reason']);obj(c.message,['role','content']);if(c.index!==0||c.finish_reason!=='stop'||c.message.role!=='assistant'||typeof c.message.content!=='string'||!c.message.content.trim()||c.message.content.length>200000)throw Error('这次模型没有完整说完，请缩短问题后手动重试。');
   let usage;if(r.usage!==undefined){obj(r.usage,['prompt_tokens','completion_tokens','total_tokens']);usage={};for(const key of ['prompt_tokens','completion_tokens','total_tokens'])if(r.usage[key]!==undefined)usage[key]=number(r.usage[key]);}return {text:c.message.content,usage,finish:'stop'};
  }
