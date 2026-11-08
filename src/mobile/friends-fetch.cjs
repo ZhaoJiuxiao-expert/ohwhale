@@ -10,7 +10,7 @@ function scopedFetch(method,url,options={}){return new Promise((resolve,reject)=
  const cancel=()=>{rpc('httpCancel',{requestId}).catch(()=>{});finish();reject(Error('好友请求已取消。'));};
  const off=subscribe(event=>{if(done||event.requestId!==requestId)return;
   if(event.type==='httpHeaders'){status=event.status;headers=event.headers;}
-  else if(event.type==='httpChunk'){const bytes=Buffer.from(event.dataBase64,'base64');size+=bytes.length;if(size>(['managedHttpStart','groupsHttpStart'].includes(method)?4*1024*1024:512*1024)){cancel();return;}chunks.push(bytes);}
+  else if(event.type==='httpChunk'){const bytes=Buffer.from(event.dataBase64,'base64');size+=bytes.length;if(size>(['managedHttpStart','groupsHttpStart','momentsHttpStart'].includes(method)?4*1024*1024:512*1024)){cancel();return;}chunks.push(bytes);}
   else if(event.type==='httpEnd'){finish();if(!status){reject(Error('好友服务回应不完整。'));return;}resolve(new Response(Buffer.concat(chunks),{status,headers}));}
   else if(event.type==='httpError'){finish();reject(Error('好友服务暂时连接不上，请稍后重试。'));}
  });
@@ -20,4 +20,5 @@ function scopedFetch(method,url,options={}){return new Promise((resolve,reject)=
 const friendsFetch=(url,options)=>scopedFetch('friendsHttpStart',url,options);
 const managedFetch=(url,options)=>scopedFetch('managedHttpStart',url,options);
 const groupsFetch=(url,options)=>scopedFetch('groupsHttpStart',url,options);
-module.exports={friendsFetch,managedFetch,groupsFetch};
+const momentsFetch=(url,options)=>scopedFetch('momentsHttpStart',url,options);
+module.exports={friendsFetch,managedFetch,groupsFetch,momentsFetch};

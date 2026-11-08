@@ -6,6 +6,7 @@ const {pathToFileURL}=require('node:url');
 const {ChatStore}=require('./core/store.cjs');
 const {FriendsClient,FRIENDS_METHODS}=require('./core/friends-client.cjs');
 const {GroupsClient,GROUPS_METHODS}=require('./core/groups-client.cjs');
+const {MomentsClient,MOMENTS_METHODS}=require('./core/moments-client.cjs');
 const {ManagedClient}=require('./core/managed-client.cjs');
 const {Harness}=require('./core/harness.cjs');
 const {MediaStore,validateWav}=require('./core/media.cjs');
@@ -24,7 +25,7 @@ app.setName('OhWhale');
 configureDataLocation(app);
 protocol.registerSchemesAsPrivileged([{scheme:'lingyu-media',privileges:{standard:true,secure:true,supportFetchAPI:true,stream:true,corsEnabled:true}}]);
 if(!app.requestSingleInstanceLock())app.exit(0);
-let win,store,media,harness,sharing,plugins,studio,knowledge,studioService,friends,managed,groups,speechInfo={recognition:false,voices:[]},closing=false,closeCommitted=false,closeTimer,greetingTimer,proactive;
+let win,store,media,harness,sharing,plugins,studio,knowledge,studioService,friends,managed,groups,moments,speechInfo={recognition:false,voices:[]},closing=false,closeCommitted=false,closeTimer,greetingTimer,proactive;
 const generationJobs=new Set();
 const voiceSession=new VoiceSession();
 const uiURL=pathToFileURL(path.join(__dirname,'ui/index.html')).href;
@@ -37,6 +38,7 @@ function text(value,max=8000){if(typeof value!=='string'||value.length>max)throw
 async function exportJSON(title,defaultName,data){const d=await dialog.showSaveDialog(win,{title,defaultPath:defaultName,filters:[{name:'JSON',extensions:['json']}]});if(d.canceled)return {path:null};if(fs.existsSync(d.filePath))throw Error('为保留已有文件，请使用一个新文件名');fs.writeFileSync(d.filePath,JSON.stringify(data,null,2),{flag:'wx'});fs.appendFileSync(path.join(app.getPath('userData'),'exports.jsonl'),JSON.stringify({at:new Date().toISOString(),type:title,path:d.filePath})+'\n');return {path:d.filePath};}
 function installBridge(){
  for(const [method,member]of Object.entries(FRIENDS_METHODS))bind(method,input=>friends[member](input));
+ for(const [method,member]of Object.entries(MOMENTS_METHODS))bind(method,input=>moments[member](input));
  for(const [method,member]of Object.entries(GROUPS_METHODS))bind(method,input=>groups[member](input));
  bind('managedCatalog',()=>managed.catalog());bind('managedUsage',()=>managed.usage());bind('managedConnect',async input=>{const result=await managed.connect(input);sharing.revokeAll();await sharing.stopAPI();stateChanged();return result;});
  bind('closeReady',async input=>{if(!closing)return false;clearTimeout(closeTimer);closing=false;if(input?.ok){closeCommitted=true;sharing.revokeAll();await sharing.stopAPI();for(const c of store.getPublic().conversations)harness.cancel(c.id);setImmediate(()=>win.close());return true;}dialog.showErrorBox('草稿尚未保存','窗口保持打开，请检查存储空间后重试。');return false;});
@@ -112,6 +114,7 @@ app.whenReady().then(async()=>{
  media=new MediaStore({dir,nativeImage});
  plugins=new PluginStore({dir,validateAgent:agentById,validateAttachments:a=>media.validated(a)});
  harness=new Harness({store,managedRequest:input=>managed.request(input),fetch:(...args)=>net.fetch(...args),resolveImage:a=>media.resolve(a.id),onEvent:emit,contextForAgent:id=>{const p=plugins.getPublic();return [p.settings.stickers?'可偶尔用一个表情标记：[sticker:rice]开饭、[sticker:hello]招呼、[sticker:hug]安慰、[sticker:think]思考、[sticker:cheer]加油、[sticker:sleep]晚安；不必每条都使用。':'',plugins.contextForAgent(id)].filter(Boolean).join('\n').slice(0,4000);},log:record=>fs.appendFileSync(path.join(dir,'api-usage.jsonl'),JSON.stringify(record)+'\n')});
+ moments=new MomentsClient({friends,media,onEvent:emit});
  groups=new GroupsClient({dir:path.join(dir,'groups'),friends,store,harness,media,onEvent:emit,encrypt:s=>{if(!safeStorage.isEncryptionAvailable())throw Error('本机群角色加密不可用');return safeStorage.encryptString(s).toString('base64');},decrypt:s=>safeStorage.decryptString(Buffer.from(s,'base64'))});groups.start();
  proactive=new ProactiveService({dir,store,harness,plugins,onChange:stateChanged,onNotify:result=>{
    if(!Notification.isSupported()||!win||win.isDestroyed()||win.isFocused())return;

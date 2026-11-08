@@ -4,6 +4,7 @@ methods.push('saveMessageSticker','proactiveStatus','proactiveCheck','proactiveC
 let closeHandler=async()=>{};
 methods.push('studioNovels');
 methods.push('stopSpeech','saveRecording');
+methods.push('momentsStatus','momentsFeed','momentsGet','momentsPublish','momentsVisibility','momentsLike','momentsComment','momentsDeletePost','momentsDeleteComment','momentsAsset');
 methods.push('groupsStatus','groupsOverview','groupsCreate','groupsGet','groupsSend','groupsInvite','groupsRespondInvite','groupsCreateInvite','groupsRevokeInvite','groupsJoin','groupsManage','groupsAddAgent','groupsAsset');
 methods.push('friendsStatus','friendsEnable','friendsState','friendsRequest','friendsRespond','friendsBlock','friendsCall','friendsRespondCall','friendsSession','friendsEndCall');
 methods.push('managedCatalog','managedUsage','managedConnect');
