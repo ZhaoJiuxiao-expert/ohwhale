@@ -47,5 +47,3 @@ async function main(){
  check('no JS errors or external requests',errors.length===0);fs.writeFileSync(path.join(out,'report.json'),JSON.stringify({synthetic:true,checks,errors,screenshots:fs.readdirSync(out).filter(f=>f.endsWith('.png'))},null,2));console.log(JSON.stringify({out,checks:checks.length,errors},null,2));
 }
 main().catch(async e=>{if(app){try{const pages=app.contexts().flatMap(c=>c.pages());await pages[0]?.screenshot({path:path.join(out,'failure.png')});fs.writeFileSync(path.join(out,'failure-dom.txt'),await pages[0]?.locator('body').innerText()||'')}catch{}};fs.writeFileSync(path.join(out,'failure.txt'),e.stack);console.error(e);process.exitCode=1}).finally(async()=>{await app?.close()});
-
-

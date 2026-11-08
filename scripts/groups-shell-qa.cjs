@@ -31,4 +31,3 @@ async function main(){
  const report={passed:true,checks,errors,blockedNetwork:network,scope:'Actual current App shell, Electron binary, preload and isolated local store; no group service or public registration. Mobile evidence is 360px desktop responsive layout, not Android hardware.',artifacts:out};fs.writeFileSync(path.join(out,'report.json'),JSON.stringify(report,null,2));console.log(JSON.stringify({out,checks:checks.length,errors,blockedNetwork:network.length},null,2));
 }
 main().catch(async e=>{if(page)await page.screenshot({path:path.join(out,'failure.png')}).catch(()=>{});fs.writeFileSync(path.join(out,'failure.txt'),e.stack);console.error(e);process.exitCode=1}).finally(async()=>{await app?.close().catch(()=>{})});
-

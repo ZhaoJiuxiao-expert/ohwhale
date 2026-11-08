@@ -1,0 +1,9 @@
+services:
+  signaling:
+    environment:
+      GROUPS_DATA_DIR: /data/groups
+      MOMENTS_DATA_DIR: /data/moments
+    volumes:
+      - ./runtime/groups:/data/groups
+      - ./runtime/moments:/data/moments
+    mem_limit: 256m

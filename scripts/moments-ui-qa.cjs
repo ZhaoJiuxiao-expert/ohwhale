@@ -22,5 +22,3 @@ async function main(){
  fs.writeFileSync(path.join(out,'report.json'),JSON.stringify({synthetic:true,checks,errors,screenshots:fs.readdirSync(out).filter(f=>f.endsWith('.png'))},null,2));console.log(JSON.stringify({out,checks:checks.length,errors},null,2));
 }
 main().catch(async e=>{if(page){await page.screenshot({path:path.join(out,'failure.png')}).catch(()=>{});fs.writeFileSync(path.join(out,'failure-dom.txt'),await page.locator('body').innerText().catch(()=>''))}fs.writeFileSync(path.join(out,'failure.txt'),e.stack);console.error(e);process.exitCode=1}).finally(async()=>{await browser?.close()});
-
-

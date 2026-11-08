@@ -1,9 +1,9 @@
 'use strict';
 const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
 const root=path.join(__dirname,'..');
-test('1.4.0 Windows, Android runtime and Android manifest share the release version and increasing code10400',()=>{
+test('1.5.0 Windows, Android runtime and Android manifest share the release version and increasing code10500',()=>{
  const desktop=require('../package.json'),mobile=require('../src/mobile/version.json'),manifest=fs.readFileSync(path.join(root,'android/AndroidManifest.xml'),'utf8');
- assert.equal(desktop.version,'1.4.0');assert.equal(mobile.version,desktop.version);assert.equal(mobile.versionCode,10400);assert.ok(mobile.versionCode>10302);
+ assert.equal(desktop.version,'1.5.0');assert.equal(mobile.version,desktop.version);assert.equal(mobile.versionCode,10500);assert.ok(mobile.versionCode>10400);
  assert.equal(/android:versionName="([^"]+)"/.exec(manifest)[1],mobile.version);assert.equal(Number(/android:versionCode="(\d+)"/.exec(manifest)[1]),mobile.versionCode);
 });
 test('default pairing service is only a public HTTPS origin and carries no authorization material',()=>{
