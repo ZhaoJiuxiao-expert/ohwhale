@@ -3,19 +3,20 @@
 const http=require('node:http'),crypto=require('node:crypto'),fs=require('node:fs'),path=require('node:path');
 const {FriendsStore}=require('./friends.cjs');
 const {GroupsStore}=require('./groups.cjs');
+const {MomentsStore}=require('./moments.cjs');
 const {ManagedAI}=require('./managed-ai.cjs');
 const TOKEN=/^[A-Za-z0-9_-]{32,128}$/,ROOM=/^[a-f0-9]{32}$/;
 const random=()=>crypto.randomBytes(32).toString('base64url');
 const equal=(a,b)=>{if(typeof a!=='string'||typeof b!=='string')return false;const x=Buffer.from(a),y=Buffer.from(b);return x.length===y.length&&crypto.timingSafeEqual(x,y);};
 const digest=s=>crypto.createHash('sha256').update(s).digest('hex');
 function originURL(value){const u=new URL(value);if(u.username||u.password||u.search||u.hash||u.pathname!=='/'||!(u.protocol==='https:'||u.protocol==='http:'&&['127.0.0.1','localhost','[::1]'].includes(u.hostname)))throw Error('SIGNAL_PUBLIC_URL must be an HTTPS origin (loopback HTTP allowed for tests)');return u.origin;}
-function createSignalingServer({ownerToken,turnSecret,turnUrls=[],publicUrl,origins=['null','https://localhost','capacitor://localhost','https://appassets.androidplatform.net'],roomTTL=300000,turnTTL=900000,maxRooms=100,trustProxy=false,now=Date.now,friendsDir,friendsLimits={},groupsDir,managedAI,managedAIOptions}={}){
+function createSignalingServer({ownerToken,turnSecret,turnUrls=[],publicUrl,origins=['null','https://localhost','capacitor://localhost','https://appassets.androidplatform.net'],roomTTL=300000,turnTTL=900000,maxRooms=100,trustProxy=false,now=Date.now,friendsDir,friendsLimits={},groupsDir,momentsDir,managedAI,managedAIOptions}={}){
  if(!TOKEN.test(ownerToken||'')||!TOKEN.test(turnSecret||''))throw Error('Owner token and TURN secret must each contain at least 32 random URL-safe characters');
  const publicOrigin=typeof publicUrl==='function'?()=>originURL(publicUrl()):()=>originURL(publicUrl);if(typeof publicUrl!=='function')publicOrigin();if(!Array.isArray(turnUrls)||turnUrls.length>8||turnUrls.some(x=>typeof x!=='string'||!/^(turn|turns|stun|stuns):[^\s@/#]+(?:\?transport=(udp|tcp))?$/.test(x)))throw Error('Invalid TURN URLs');
  if(!Number.isInteger(roomTTL)||roomTTL<1000||roomTTL>600000||!Number.isInteger(turnTTL)||turnTTL<1000||turnTTL>3600000)throw Error('Invalid capability lifetime');
  const rooms=new Map(),limits=new Map(),salt=random();let closed=false;
- let friends,groups;
- function cleanup(){const time=now();for(const [id,r]of rooms)if(r.expiresAt<=time)rooms.delete(id);for(const [key,v]of limits)if(v.until<=time)limits.delete(key);friends?.cleanup();groups?.cleanup();}
+ let friends,groups,moments;
+ function cleanup(){const time=now();for(const [id,r]of rooms)if(r.expiresAt<=time)rooms.delete(id);for(const [key,v]of limits)if(v.until<=time)limits.delete(key);friends?.cleanup();groups?.cleanup();moments?.cleanup();}
  const sweep=setInterval(cleanup,10000);sweep.unref();
  function rate(key,limit){const time=now();let v=limits.get(key);if(!v||v.until<=time){if(limits.size>=10000)return false;v={count:0,until:time+60000};limits.set(key,v);}return ++v.count<=limit;}
  function ice(roomId,role){const expiresAt=now()+turnTTL,username=Math.floor(expiresAt/1000)+':'+roomId+':'+role;return {iceServers:turnUrls.length?[{urls:[...turnUrls],username,credential:crypto.createHmac('sha1',turnSecret).update(username).digest('base64')}]:[],credentialExpiresAt:expiresAt};}
@@ -29,6 +30,7 @@ function createSignalingServer({ownerToken,turnSecret,turnUrls=[],publicUrl,orig
  }
  if(friendsDir)friends=new FriendsStore({dir:friendsDir,now,limits:friendsLimits,destroyRoom:id=>rooms.delete(id),createPairedRoom:({ip,expiresAt})=>{const created=createRoom({ip,expiresAt,mode:'human',policy:'all',paired:true});return {serverUrl:publicOrigin(),host:created.host,guest:created.guest};}});
  if(groupsDir)groups=new GroupsStore({dir:groupsDir,friends,now});
+ if(momentsDir)moments=new MomentsStore({dir:momentsDir,friends,now});
  if(!managedAI)managedAI=new ManagedAI(managedAIOptions);
  const server=http.createServer(async(req,res)=>{
   const requestOrigin=req.headers.origin;const allowed=requestOrigin===undefined||requestOrigin===publicOrigin()||origins.includes(requestOrigin);
@@ -46,6 +48,12 @@ function createSignalingServer({ownerToken,turnSecret,turnUrls=[],publicUrl,orig
   const auth=typeof req.headers.authorization==='string'?req.headers.authorization.replace(/^Bearer /,''):'';
   async function body(max=220000){if(!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type']||''))throw {status:415,code:'JSON_REQUIRED'};const parts=[];let size=0;for await(const chunk of req){size+=chunk.length;if(size>max)throw {status:413,code:'BODY_LIMIT'};parts.push(chunk);}let value;try{value=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(Buffer.concat(parts)));}catch{throw {status:400,code:'BAD_JSON'};}if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).some(k=>['__proto__','constructor','prototype'].includes(k)))throw {status:400,code:'BAD_SCHEMA'};return value;}
   try{
+   if(req.url?.startsWith('/v1/moments/')){
+    if(!moments)return error(503,'MOMENTS_DISABLED','这个服务尚未启用云端动态');
+    if(req.method!=='POST')return error(405,'BAD_METHOD','请使用正确的动态操作');
+    const match=/^\/v1\/moments\/(feed|get|publish|visibility|like|comment|delete-post|delete-comment|asset)$/.exec(req.url);if(!match)return error(404,'NOT_FOUND','没有这项动态操作');
+    const self=friends.authenticate(auth,remote),input=await body(3*1024*1024);return send(200,moments.handle(match[1],{self,input}));
+   }
    if(req.url?.startsWith('/v1/groups/')){
     if(!groups)return error(503,'GROUPS_DISABLED','这个服务尚未启用群聊');
     if(req.method!=='POST')return error(405,'BAD_METHOD','请使用正确的群聊操作');
@@ -93,8 +101,8 @@ function createSignalingServer({ownerToken,turnSecret,turnUrls=[],publicUrl,orig
   }catch(e){error(e.status||503,e.code||'REQUEST_FAILED',e.status?e.message:'服务暂不可用');}
  });
  server.requestTimeout=15000;server.headersTimeout=10000;server.maxHeadersCount=30;
- server.on('close',()=>{closed=true;clearInterval(sweep);friends?.close();groups?.close();rooms.clear();limits.clear();});
- return {server,friends,groups,close:async()=>{if(closed)return;server.closeAllConnections?.();await new Promise(resolve=>server.close(resolve));},stats:()=>({rooms:rooms.size,rateBuckets:limits.size})};
+ server.on('close',()=>{closed=true;clearInterval(sweep);friends?.close();groups?.close();moments?.close();rooms.clear();limits.clear();});
+ return {server,friends,groups,moments,close:async()=>{if(closed)return;server.closeAllConnections?.();await new Promise(resolve=>server.close(resolve));},stats:()=>({rooms:rooms.size,rateBuckets:limits.size})};
 }
-if(require.main===module){let managedAIOptions={};if(process.env.MANAGED_AI_KEY_FILE&&process.env.MANAGED_AI_DATA_DIR){const file=process.env.MANAGED_AI_KEY_FILE,stat=fs.lstatSync(file);if(!stat.isFile()||stat.isSymbolicLink()||stat.size>4096||(process.platform!=='win32'&&((stat.mode&0o777)!==0o600||stat.uid!==1000)))throw Error('Managed key file must be private and owned by uid 1000');const data=fs.lstatSync(process.env.MANAGED_AI_DATA_DIR);if(!data.isDirectory()||data.isSymbolicLink()||(process.platform!=='win32'&&((data.mode&0o777)!==0o700||data.uid!==1000)))throw Error('Managed data directory must be private and owned by uid 1000');managedAIOptions={apiKey:fs.readFileSync(file,'utf8'),dir:process.env.MANAGED_AI_DATA_DIR};}const app=createSignalingServer({managedAIOptions,ownerToken:process.env.SIGNAL_OWNER_TOKEN,turnSecret:process.env.TURN_SHARED_SECRET,turnUrls:JSON.parse(process.env.TURN_URLS||'[]'),publicUrl:process.env.SIGNAL_PUBLIC_URL,origins:JSON.parse(process.env.SIGNAL_ORIGINS||'["null","https://localhost","capacitor://localhost","https://appassets.androidplatform.net"]'),trustProxy:process.env.SIGNAL_TRUST_PROXY==='true',friendsDir:process.env.FRIENDS_DATA_DIR||undefined,groupsDir:process.env.GROUPS_DATA_DIR||undefined});app.server.listen(Number(process.env.PORT||8787),'127.0.0.1',()=>console.log('OhWhale signaling ready on loopback; no request/message logging'));}
+if(require.main===module){let managedAIOptions={};if(process.env.MANAGED_AI_KEY_FILE&&process.env.MANAGED_AI_DATA_DIR){const file=process.env.MANAGED_AI_KEY_FILE,stat=fs.lstatSync(file);if(!stat.isFile()||stat.isSymbolicLink()||stat.size>4096||(process.platform!=='win32'&&((stat.mode&0o777)!==0o600||stat.uid!==1000)))throw Error('Managed key file must be private and owned by uid 1000');const data=fs.lstatSync(process.env.MANAGED_AI_DATA_DIR);if(!data.isDirectory()||data.isSymbolicLink()||(process.platform!=='win32'&&((data.mode&0o777)!==0o700||data.uid!==1000)))throw Error('Managed data directory must be private and owned by uid 1000');managedAIOptions={apiKey:fs.readFileSync(file,'utf8'),dir:process.env.MANAGED_AI_DATA_DIR};}const app=createSignalingServer({managedAIOptions,ownerToken:process.env.SIGNAL_OWNER_TOKEN,turnSecret:process.env.TURN_SHARED_SECRET,turnUrls:JSON.parse(process.env.TURN_URLS||'[]'),publicUrl:process.env.SIGNAL_PUBLIC_URL,origins:JSON.parse(process.env.SIGNAL_ORIGINS||'["null","https://localhost","capacitor://localhost","https://appassets.androidplatform.net"]'),trustProxy:process.env.SIGNAL_TRUST_PROXY==='true',friendsDir:process.env.FRIENDS_DATA_DIR||undefined,groupsDir:process.env.GROUPS_DATA_DIR||undefined,momentsDir:process.env.MOMENTS_DATA_DIR||undefined});app.server.listen(Number(process.env.PORT||8787),'127.0.0.1',()=>console.log('OhWhale signaling ready on loopback; no request/message logging'));}
 module.exports={createSignalingServer,originURL};
