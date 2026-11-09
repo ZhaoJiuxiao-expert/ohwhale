@@ -2,6 +2,11 @@
 const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
 const defaults=require('./managed-models.json');
 const UPSTREAM='https://api.atlascloud.ai/v1/chat/completions';
+// Daily-chat policy, exact model IDs only. Atlas documents Chat Completions
+// reasoning-flag normalization (Gateway behavior), checked 2026-11-09:
+// https://www.atlascloud.ai/docs/llm-protocols#gateway-behavior
+// Mock coverage verifies the request contract; live per-model behavior needs QA.
+const DAILY_CHAT_MODELS=new Set(['deepseek-ai/deepseek-v4.1-flash','qwen/qwen3.5-flash','moonshotai/kimi-k2.6']);
 const PREFIX=new Set(['deepseek-ai','bytedance','qwen','moonshotai','minimaxai','zai-org','tencent','xiaomi','kwaipilot','dots-studio','meituan-longcat']);
 const hash=x=>crypto.createHash('sha256').update(String(x)).digest('hex');
 const fail=(status,code,message)=>{throw {status,code,message};};
@@ -37,7 +42,7 @@ class ManagedAI {
   const timer=setTimeout(()=>{timedOut=true;abort();},75000);
   try{
    if(controller.signal.aborted)throw Error();
-   const response=await Promise.race([this.fetch(UPSTREAM,{method:'POST',headers:{Authorization:'Bearer '+this.key,'Content-Type':'application/json'},body:JSON.stringify({model:model.id,messages,stream:false,max_tokens:Math.min(input.max_tokens||4096,4096)}),redirect:'error',signal:controller.signal}),new Promise((_,reject)=>{if(controller.signal.aborted)reject(Error('cancelled'));else controller.signal.addEventListener('abort',()=>reject(Error('cancelled')),{once:true});})]);
+   const response=await Promise.race([this.fetch(UPSTREAM,{method:'POST',headers:{Authorization:'Bearer '+this.key,'Content-Type':'application/json'},body:JSON.stringify({model:model.id,messages,stream:false,max_tokens:Math.min(input.max_tokens||4096,4096),...(DAILY_CHAT_MODELS.has(model.id)?{thinking:{type:'disabled'}}:{})}),redirect:'error',signal:controller.signal}),new Promise((_,reject)=>{if(controller.signal.aborted)reject(Error('cancelled'));else controller.signal.addEventListener('abort',()=>reject(Error('cancelled')),{once:true});})]);
    if(!response||typeof response.ok!=='boolean'){failureCode='UPSTREAM_INVALID_RESPONSE';throw Error();}
    if(!response.ok){failureCode='UPSTREAM_HTTP';if(Number.isInteger(response.status)&&response.status>=100&&response.status<=599)upstreamStatus=response.status;throw Error();}
    failureCode='UPSTREAM_INVALID_RESPONSE';
