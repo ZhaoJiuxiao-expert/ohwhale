@@ -76,6 +76,7 @@ public final class MainActivity extends Activity {
   private String pickerId,pickerMethod,exportId,exportText,recognizeId;
   private PermissionRequest audioRequest;
   private ValueCallback<Uri[]> imageChooser;
+  private String fileChooserKind;
   private String nativePermissionId,nativePermissionMethod;
 
   @Override public void onCreate(Bundle state){
@@ -104,8 +105,11 @@ public final class MainActivity extends Activity {
       @Override public void onPermissionRequestCanceled(PermissionRequest request){if(audioRequest==request)audioRequest=null;}
       @Override public boolean onShowFileChooser(WebView view,ValueCallback<Uri[]> callback,FileChooserParams params){
         if(!trustedPage||!PAGE.equals(view.getUrl())||params.getMode()!=FileChooserParams.MODE_OPEN){callback.onReceiveValue(null);return true;}
-        String[] accepts=params.getAcceptTypes();boolean valid=accepts.length>0;for(String accept:accepts)if(!Arrays.asList("image/*","image/png","image/jpeg","image/webp","image/gif","image/bmp").contains(accept))valid=false;
-        if(!valid||imageChooser!=null){callback.onReceiveValue(null);return true;}imageChooser=callback;try{startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("image/*"),105);}catch(Exception e){imageChooser=null;callback.onReceiveValue(null);}return true;
+        String kind=fileChooserKind(params.getAcceptTypes());
+        if(kind==null||imageChooser!=null){callback.onReceiveValue(null);return true;}imageChooser=callback;fileChooserKind=kind;
+        Intent picker=new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("image".equals(kind)?"image/*":"*/*");
+        if("model".equals(kind))picker.putExtra(Intent.EXTRA_MIME_TYPES,new String[]{"model/gltf-binary","model/gltf+json","application/octet-stream"});
+        try{startActivityForResult(picker,105);}catch(Exception e){imageChooser=null;fileChooserKind=null;callback.onReceiveValue(null);}return true;
       }
       @Override public boolean onConsoleMessage(ConsoleMessage message){if(BuildConfig.DEBUG)android.util.Log.d("OhWhaleWeb",message.messageLevel()+" line "+message.lineNumber());return true;}
     });
@@ -244,8 +248,19 @@ public final class MainActivity extends Activity {
   }catch(Exception e){try{emit(new JSONObject().put("type","httpError").put("requestId",requestId).put("error","好友服务暂时连接不上，请检查网络后重试。"));}catch(Exception ignored){}}finally{deadline.cancel(false);calls.remove(requestId);if(call.connection!=null)call.connection.disconnect();}}
   private void openPicker(String id,String kind){runOnUiThread(()->{if(pickerId!=null){reply(id,false,null,"请先完成上一次文件选择。");return;}pickerId=id;pickerMethod=kind;Intent i=new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("image".equals(kind)?"image/*":"json".equals(kind)?"application/json":"*/*");if("novel".equals(kind))i.putExtra(Intent.EXTRA_MIME_TYPES,new String[]{"text/plain","text/markdown","application/vnd.openxmlformats-officedocument.wordprocessingml.document"});try{startActivityForResult(i,101);}catch(Exception e){pickerId=null;reply(id,false,null,"这台设备暂时没有文件选择器。");}});}
   private String uriName(Uri uri){String name="导入文件";try(Cursor c=getContentResolver().query(uri,new String[]{OpenableColumns.DISPLAY_NAME},null,null,null)){if(c!=null&&c.moveToFirst()&&c.getString(0)!=null)name=c.getString(0);}catch(Exception ignored){}name=name.replaceAll("[\\x00-\\x1f\\x7f/\\\\]","_");return name.length()>180?name.substring(0,180):name;}
+  // Web content can request only the two explicit import categories, never arbitrary files.
+  static String fileChooserKind(String[] accepts){
+    if(accepts==null||accepts.length==0)return null;String kind=null;
+    for(String group:accepts){if(group==null)return null;for(String raw:group.split(",",-1)){String accept=raw.trim().toLowerCase(Locale.ROOT),next;
+      if(Arrays.asList("image/*","image/png","image/jpeg","image/webp","image/gif","image/bmp").contains(accept))next="image";
+      else if(Arrays.asList(".glb",".gltf","model/gltf-binary","model/gltf+json").contains(accept))next="model";
+      else return null;if(kind!=null&&!kind.equals(next))return null;kind=next;
+    }}return kind;
+  }
   @Override protected void onActivityResult(int request,int result,Intent intent){super.onActivityResult(request,result,intent);
-    if(request==105){ValueCallback<Uri[]> callback=imageChooser;imageChooser=null;if(callback==null)return;Uri uri=result==RESULT_OK&&intent!=null?intent.getData():null;if(uri==null||!"content".equals(uri.getScheme())||!trustedPage||!PAGE.equals(web.getUrl())){callback.onReceiveValue(null);return;}callback.onReceiveValue(new Uri[]{uri});return;}
+    if(request==105){ValueCallback<Uri[]> callback=imageChooser;String kind=fileChooserKind;imageChooser=null;fileChooserKind=null;if(callback==null)return;Uri uri=result==RESULT_OK&&intent!=null?intent.getData():null;if(uri==null||!"content".equals(uri.getScheme())||!trustedPage||!PAGE.equals(web.getUrl())){callback.onReceiveValue(null);return;}
+      if("model".equals(kind)){workers.execute(()->{boolean valid=false;try{String name=uriName(uri);if(!name.toLowerCase(Locale.ROOT).matches(".*\\.(glb|gltf)$"))throw new IOException("Unsupported model file");byte[] bytes=read(getContentResolver().openInputStream(uri),16*1024*1024);valid=bytes.length>0;}catch(Exception ignored){}final boolean accepted=valid;runOnUiThread(()->callback.onReceiveValue(accepted&&trustedPage&&PAGE.equals(web.getUrl())?new Uri[]{uri}:null));});return;}
+      callback.onReceiveValue(new Uri[]{uri});return;}
     if(request==101){String id=pickerId,kind=pickerMethod;pickerId=null;pickerMethod=null;if(id==null)return;if(result!=RESULT_OK||intent==null||intent.getData()==null){reply(id,true,JSONObject.NULL,null);return;}Uri uri=intent.getData();if(!"content".equals(uri.getScheme())){reply(id,false,null,"请通过系统文件选择器选取文件。");return;}workers.execute(()->{try{String name=uriName(uri);byte[] bytes=read(getContentResolver().openInputStream(uri),"image".equals(kind)?10*1024*1024:MAX_FILE);if("image".equals(kind))reply(id,true,vault.putMedia(bytes,"image",name,""),null);else if("json".equals(kind)){String text=decodeText(bytes);new JSONObject(text);reply(id,true,new JSONObject().put("text",text).put("name",name),null);}else{String text=novelText(name,bytes);String archive=vault.archiveOriginal(name,bytes);reply(id,true,new JSONObject().put("text",text).put("name",name).put("source","Android文件选择："+name).put("originalArchive",archive),null);}}catch(Exception e){reply(id,false,null,friendly(e));}});}
     if(request==103){String id=exportId,data=exportText;exportId=null;exportText=null;if(id==null)return;if(result!=RESULT_OK||intent==null||intent.getData()==null){reply(id,true,new JSONObject(),null);return;}Uri uri=intent.getData();if(!"content".equals(uri.getScheme())){reply(id,false,null,"请通过系统文件选择器保存文件。");return;}workers.execute(()->{try(OutputStream out=getContentResolver().openOutputStream(uri,"w")){if(out==null)throw new IOException("no output");out.write(data.getBytes(StandardCharsets.UTF_8));reply(id,true,new JSONObject().put("path",uri.toString()),null);}catch(Exception e){reply(id,false,null,"文件没有保存完成，请选择其他位置重试。");}});}
     if(request==104){String id=recognizeId;recognizeId=null;if(id==null)return;if(result==RESULT_OK&&intent!=null){ArrayList<String> words=intent.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS);try{reply(id,true,new JSONObject().put("text",words!=null&&!words.isEmpty()?words.get(0):""),null);}catch(Exception ignored){}}else reply(id,false,null,"这次系统语音输入已取消，还没有文字发出去。");}
