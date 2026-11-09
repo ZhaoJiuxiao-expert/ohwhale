@@ -42,6 +42,11 @@ function createSignalingServer({ownerToken,turnSecret,turnUrls=[],publicUrl,orig
   if(trustProxy&&['127.0.0.1','::1','::ffff:127.0.0.1'].includes(remote)&&typeof req.headers['x-forwarded-for']==='string')remote=req.headers['x-forwarded-for'].split(',')[0].trim();
   const ip=digest(salt+remote);cleanup();if(!rate('all:'+ip,240))return error(429,'RATE_LIMIT','请求过于频繁');
   if(req.url==='/health'&&req.method==='GET')return send(200,{ok:true,protocol:1,turnConfigured:turnUrls.some(x=>/^turns?:/.test(x))});
+  if((req.method==='GET'||req.method==='HEAD')&&(req.url==='/terms'||req.url==='/terms.html')){
+   const page=fs.readFileSync(path.join(__dirname,'terms.html'));
+   res.writeHead(200,{'Content-Type':'text/html; charset=utf-8','Content-Length':String(page.length),'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','Content-Security-Policy':"default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"});
+   return res.end(req.method==='HEAD'?undefined:page);
+  }
   const staticFiles={'/check':['check.html','text/html; charset=utf-8'],'/client/check.js':['check.js','text/javascript'],'/client/network.js':['../src/p2p/network.js','text/javascript'],'/client/peer.js':['../src/p2p/peer.js','text/javascript']};
   if(req.method==='GET'&&Object.hasOwn(staticFiles,req.url||'')){const [file,type]=staticFiles[req.url];res.writeHead(200,{'Content-Type':type,'Cache-Control':'no-store','Referrer-Policy':'no-referrer','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' https: http://127.0.0.1:*; object-src 'none'; base-uri 'none'"});return res.end(fs.readFileSync(path.join(__dirname,file)));}
   if(req.url?.includes('?')||req.url?.length>160)return error(404,'NOT_FOUND','房间不存在或已失效');
