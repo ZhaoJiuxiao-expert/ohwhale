@@ -2,7 +2,9 @@ import React,{useState} from 'react';
 import {ArrowUpRight,MessageCircle,Users,Settings,ArrowRight,Sparkles,Map,Gamepad2,Home} from 'lucide-react';
 import './house.css';
 
-export function HousePortrait({agent,size=''}){return <span className={`house-portrait ${size}`} style={{'--portrait-hue':`${[...String(agent?.id||'a')].reduce((n,c)=>n+c.charCodeAt(0),0)%60+155}`}}>{agent?.avatar?<img src={agent.avatar} alt=""/>:<span>{(agent?.name||'鲸').slice(0,1)}</span>}</span>}
+// Match only shipped image paths: a custom avatar keeps its own framing even on a built-in role.
+const PORTRAIT_SHEETS=Object.freeze({'assets/qwen.png':'qwen','assets/kimi.png':'kimi','assets/doubao.png':'doubao','assets/chatgpt.png':'chatgpt','assets/claude.png':'claude','assets/gemini.png':'gemini','assets/grok.png':'grok'});
+export function HousePortrait({agent,size=''}){const sheet=Object.hasOwn(PORTRAIT_SHEETS,agent?.avatar)?PORTRAIT_SHEETS[agent.avatar]:'';return <span className={`house-portrait ${size}${sheet?` house-portrait-sheet house-portrait-${sheet}`:''}`} style={{'--portrait-hue':`${[...String(agent?.id||'a')].reduce((n,c)=>n+c.charCodeAt(0),0)%60+155}`}}>{agent?.avatar?<img src={agent.avatar} alt=""/>:<span>{(agent?.name||'鲸').slice(0,1)}</span>}</span>}
 const places=[{id:'dorm',Icon:Home,label:'回宿舍',subtitle:'三位伙伴，留一盏灯',color:'peach'},{id:'travel',Icon:Map,label:'一起旅行',subtitle:'从月湾小镇出发',color:'sage'},{id:'game',Icon:Gamepad2,label:'玩一小局',subtitle:'猜数字 · 石头剪刀布',color:'butter'}];
 
 export default function HouseHome({state={},onChat=()=>{},onRoom=()=>{},onOpenChats=()=>{},onOpenGroups=()=>{},onOpenSettings=()=>{}}){
