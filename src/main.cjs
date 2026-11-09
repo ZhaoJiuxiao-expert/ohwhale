@@ -1,4 +1,5 @@
-const {app,BrowserWindow,ipcMain,dialog,safeStorage,net,protocol,nativeImage,clipboard,Notification}=require('electron');
+const {app,BrowserWindow,ipcMain,dialog,safeStorage,net,protocol,nativeImage,clipboard,Notification,shell}=require('electron');
+const {externalLink}=require('./core/external-links.cjs');
 const fs=require('node:fs');
 const path=require('node:path');
 const crypto=require('node:crypto');
@@ -8,6 +9,10 @@ const {FriendsClient,FRIENDS_METHODS}=require('./core/friends-client.cjs');
 const {GroupsClient,GROUPS_METHODS}=require('./core/groups-client.cjs');
 const {MomentsClient,MOMENTS_METHODS}=require('./core/moments-client.cjs');
 const {ManagedClient}=require('./core/managed-client.cjs');
+const {HouseSetup}=require('./core/house-setup.cjs');
+const {RoomService,ROOMS_METHODS}=require('./core/rooms-service.cjs');
+const {RoomModels}=require('./core/room-models.cjs');
+const {applyRoomScene}=require('./core/room-bridge.cjs');
 const {Harness}=require('./core/harness.cjs');
 const {MediaStore,validateWav}=require('./core/media.cjs');
 const {runSpeech}=require('./core/speech.cjs');
@@ -25,7 +30,7 @@ app.setName('OhWhale');
 configureDataLocation(app);
 protocol.registerSchemesAsPrivileged([{scheme:'lingyu-media',privileges:{standard:true,secure:true,supportFetchAPI:true,stream:true,corsEnabled:true}}]);
 if(!app.requestSingleInstanceLock())app.exit(0);
-let win,store,media,harness,sharing,plugins,studio,knowledge,studioService,friends,managed,groups,moments,speechInfo={recognition:false,voices:[]},closing=false,closeCommitted=false,closeTimer,greetingTimer,proactive;
+let win,store,media,harness,sharing,plugins,studio,knowledge,studioService,friends,managed,groups,moments,house,rooms,roomModels,speechInfo={recognition:false,voices:[]},closing=false,closeCommitted=false,closeTimer,greetingTimer,proactive;
 const generationJobs=new Set();
 const voiceSession=new VoiceSession();
 const uiURL=pathToFileURL(path.join(__dirname,'ui/index.html')).href;
@@ -40,6 +45,10 @@ function installBridge(){
  for(const [method,member]of Object.entries(FRIENDS_METHODS))bind(method,input=>friends[member](input));
  for(const [method,member]of Object.entries(MOMENTS_METHODS))bind(method,input=>moments[member](input));
  for(const [method,member]of Object.entries(GROUPS_METHODS))bind(method,input=>groups[member](input));
+ for(const [method,member]of Object.entries(ROOMS_METHODS))bind(method,input=>{return method==='roomsScene'?applyRoomScene(rooms,roomModels,input):rooms[member](input);});
+ bind('roomModelsImport',input=>roomModels.import(input));bind('roomModelsGet',input=>roomModels.get(input));
+ bind('openExternal',async input=>{await shell.openExternal(externalLink(input));return true;});
+ bind('housePlan',input=>house.plan(input));bind('houseConnect',async input=>{try{return await house.connect(input)}finally{sharing.revokeAll();await sharing.stopAPI();stateChanged()}});
  bind('managedCatalog',()=>managed.catalog());bind('managedUsage',()=>managed.usage());bind('managedConnect',async input=>{const result=await managed.connect(input);sharing.revokeAll();await sharing.stopAPI();stateChanged();return result;});
  bind('closeReady',async input=>{if(!closing)return false;clearTimeout(closeTimer);closing=false;if(input?.ok){closeCommitted=true;sharing.revokeAll();await sharing.stopAPI();for(const c of store.getPublic().conversations)harness.cancel(c.id);setImmediate(()=>win.close());return true;}dialog.showErrorBox('草稿尚未保存','窗口保持打开，请检查存储空间后重试。');return false;});
  bind('proactiveStatus',()=>({...proactive.status(),supported:true,backgroundEnabled:false,platform:'windows',notificationsAllowed:Notification.isSupported()}));
@@ -115,6 +124,8 @@ app.whenReady().then(async()=>{
  plugins=new PluginStore({dir,validateAgent:agentById,validateAttachments:a=>media.validated(a)});
  harness=new Harness({store,managedRequest:input=>managed.request(input),fetch:(...args)=>net.fetch(...args),resolveImage:a=>media.resolve(a.id),onEvent:emit,contextForAgent:id=>{const p=plugins.getPublic();return [p.settings.stickers?'可偶尔用一个表情标记：[sticker:rice]开饭、[sticker:hello]招呼、[sticker:hug]安慰、[sticker:think]思考、[sticker:cheer]加油、[sticker:sleep]晚安；不必每条都使用。':'',plugins.contextForAgent(id)].filter(Boolean).join('\n').slice(0,4000);},log:record=>fs.appendFileSync(path.join(dir,'api-usage.jsonl'),JSON.stringify(record)+'\n')});
  moments=new MomentsClient({friends,media,onEvent:emit});
+ const roomCrypto={encrypt:s=>{if(!safeStorage.isEncryptionAvailable())throw Error('小屋的本机加密暂时不可用，请稍后重试。');return safeStorage.encryptString(s).toString('base64');},decrypt:s=>safeStorage.decryptString(Buffer.from(s,'base64'))};
+ house=new HouseSetup({store,managed});roomModels=new RoomModels({dir:path.join(dir,'room-models'),...roomCrypto});rooms=new RoomService({dir:path.join(dir,'rooms'),store,harness,onEvent:emit,...roomCrypto});
  groups=new GroupsClient({dir:path.join(dir,'groups'),friends,store,harness,media,onEvent:emit,encrypt:s=>{if(!safeStorage.isEncryptionAvailable())throw Error('本机群角色加密不可用');return safeStorage.encryptString(s).toString('base64');},decrypt:s=>safeStorage.decryptString(Buffer.from(s,'base64'))});groups.start();
  proactive=new ProactiveService({dir,store,harness,plugins,onChange:stateChanged,onNotify:result=>{
    if(!Notification.isSupported()||!win||win.isDestroyed()||win.isFocused())return;
@@ -135,5 +146,5 @@ app.whenReady().then(async()=>{
  installBridge();installStudioBridge({bind,studio,service:studioService,knowledge,dialog,win,exportJSON});await win.loadURL(uiURL);runSpeech('info').then(info=>{speechInfo=info;stateChanged();}).catch(()=>{});
  greetingTimer=setInterval(()=>checkGreetings(),60000);setTimeout(()=>checkGreetings(),20000);
 }).catch(error=>{dialog.showErrorBox('哦鲸鲸未能启动',error.message);app.quit();});
-app.on('window-all-closed',()=>{clearInterval(greetingTimer);groups?.dispose();proactive?.dispose();app.quit();});
-app.on('before-quit',()=>{clearInterval(greetingTimer);groups?.dispose();proactive?.dispose();voiceSession.stop();sharing?.revokeAll();});
+app.on('window-all-closed',()=>{clearInterval(greetingTimer);groups?.dispose();rooms?.dispose();proactive?.dispose();app.quit();});
+app.on('before-quit',()=>{clearInterval(greetingTimer);groups?.dispose();rooms?.dispose();proactive?.dispose();voiceSession.stop();sharing?.revokeAll();});

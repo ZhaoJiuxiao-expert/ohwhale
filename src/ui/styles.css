@@ -72,3 +72,14 @@ body{background:#edf3fb}.app-shell{padding:0 10px 10px;background:radial-gradien
 @media(max-width:700px){.groups-host{width:100%;height:100%;min-height:0}.app-rail>button{flex:1;min-width:0}}
 /* Four desktop destinations keep their short labels on a single line. */
 @media(min-width:701px){.desktop-primary-nav{gap:2px}.desktop-primary-nav>button{gap:5px;padding:9px 5px}.desktop-primary-nav>button svg{flex-shrink:0}.desktop-primary-nav .rail-label{white-space:nowrap}}
+
+/* The home is a quiet entrance; existing tools remain in their own workspaces. */
+.house-host,.rooms-host{flex:1;min-width:0;min-height:0;overflow:auto}.rooms-host{flex-direction:column;overflow:hidden}
+.workspace.house-open .chat-layout,.workspace.house-open>.profile-panel,.workspace.rooms-open .chat-layout,.workspace.rooms-open>.profile-panel{display:none!important}
+.workspace.house-open>.desktop-personal{display:none}.app-shell[data-view="house"] .global-toolbar{display:none}.app-shell[data-view="house"] .window-caption{display:none}
+.room-route-strip{display:flex;align-items:center;justify-content:space-between;gap:10px;flex:none;padding:9px 18px;background:#f8fafb;color:#738595;font-size:12px;border-bottom:1px solid #e6ecf0}
+.room-route-strip button{border:0;border-radius:18px;background:#edf2f7;color:#45617a;min-height:34px;padding:7px 12px;cursor:pointer}.room-route-strip button:hover{background:#e2edf7}
+.workspace.groups-open .groups-host{flex-direction:column}.desktop-primary-nav{grid-template-columns:repeat(5,minmax(0,1fr))}.desktop-primary-nav>button{font-size:12px}
+@media(max-width:700px){.house-host,.rooms-host{width:100%;height:100%;min-height:0}.room-route-strip{padding:7px 10px;gap:6px}.room-route-strip>span{display:none}.app-rail .rail-label{font-size:11px}}
+ .agreement-note{font-size:12px;color:#6b7475;line-height:1.6}.agreement-link{padding:0;border:0;background:none;text-decoration:underline;text-underline-offset:3px;color:#437266;cursor:pointer}.agreement-note small[role=alert]{display:block;color:#b04449}
+ .account-home>footer{flex-wrap:wrap}.account-home>footer .agreement-note{flex-basis:100%}

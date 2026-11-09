@@ -8,6 +8,7 @@ methods.push('momentsStatus','momentsFeed','momentsGet','momentsPublish','moment
 methods.push('groupsStatus','groupsOverview','groupsCreate','groupsGet','groupsSend','groupsInvite','groupsRespondInvite','groupsCreateInvite','groupsRevokeInvite','groupsJoin','groupsManage','groupsAddAgent','groupsAsset');
 methods.push('friendsStatus','friendsEnable','friendsState','friendsRequest','friendsRespond','friendsBlock','friendsCall','friendsRespondCall','friendsSession','friendsEndCall');
 methods.push('managedCatalog','managedUsage','managedConnect');
+methods.push('openExternal','housePlan','houseConnect','roomsOverview','roomsCreate','roomsGet','roomsSend','roomsCancel','roomsRetry','roomsPlay','roomsScene','roomModelsImport','roomModelsGet');
 methods.push('studioList','studioCreate','studioOpen','studioRename','studioSaveEntry','studioCopyEntry','studioValidate','studioHistory','studioRollback','studioExport','studioImport','studioApply','studioActivate','studioSeed','studioAsk','knowledgeSearch','knowledgeRebuild','knowledgeStatus','studioSkills','studioImportNovel','studioNovelPersona','studioDraftSave','studioDraftList','studioDraftRemove');
 ipcRenderer.on('ly:closing',async()=>{try{await closeHandler();await ipcRenderer.invoke('ly:closeReady',{ok:true});}catch{await ipcRenderer.invoke('ly:closeReady',{ok:false});}});
 contextBridge.exposeInMainWorld('ly',{

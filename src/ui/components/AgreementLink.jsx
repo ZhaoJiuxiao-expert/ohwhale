@@ -1,0 +1,2 @@
+import React,{useState} from 'react';
+export default function AgreementLink(){const [error,setError]=useState('');return <span className="agreement-note">使用即表示接受 <button type="button" className="agreement-link" onClick={async()=>{setError('');try{await window.ly.openExternal({url:'https://47.86.23.218/terms'})}catch(e){setError(e.message||'暂时打不开协议，请稍后再试。')}}}>用户协议</button>{error&&<small role="alert">{error}</small>}</span>}

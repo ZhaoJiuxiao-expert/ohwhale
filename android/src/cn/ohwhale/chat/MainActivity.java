@@ -173,6 +173,7 @@ public final class MainActivity extends Activity {
   private void dispatch(String id,String method,JSONObject a)throws Exception{
     switch(method){
       case "capabilities":reply(id,true,capabilities(),null);break;
+      case "openExternal":{String url=required(a,"url",128);if(!"https://47.86.23.218/terms".equals(url))throw new Exception("这份链接暂未开放。");runOnUiThread(()->{try{if(!trustedPage)throw new Exception("请从小屋打开协议。");startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse(url)).addCategory(Intent.CATEGORY_BROWSABLE));reply(id,true,true,null);}catch(Exception e){reply(id,false,null,"暂时打不开浏览器，可以手动访问 https://47.86.23.218/terms");}});break;}
       case "proactiveEnable":{
         if(!(a.opt("enabled") instanceof Boolean))throw new Exception("请确认后台问候开关。");
         if(!a.getBoolean("enabled")){reply(id,true,proactiveEngine().enable(false),null);break;}

@@ -28,6 +28,7 @@ async function main(){
  copyTree(path.join(root,'licenses'),path.join(assets,'licenses'));
  copy(path.join(root,'THIRD_PARTY_NOTICES.md'),path.join(assets,'THIRD_PARTY_NOTICES.md'));
  copy(path.join(root,'docs/house-1.6.md'),path.join(assets,'docs/house-1.6.md'));
+ copy(path.join(root,'docs/release-1.6-verification.md'),path.join(assets,'docs/release-1.6-verification.md'));
  let html=fs.readFileSync(path.join(uiSource,'index.html'),'utf8');html=html.replace(/content="default-src[^"\n]*"/,'content="default-src \'self\'; script-src \'self\'; style-src \'self\' \'unsafe-inline\'; img-src \'self\' data: blob: lingyu-media:; media-src \'self\' data: blob: lingyu-media:; connect-src \'self\' https: http://127.0.0.1:* http://localhost:* lingyu-media:; frame-src \'none\'; object-src \'none\'; base-uri \'none\'; form-action \'none\'"');html=html.replace('<script src="./bundle.js">','<script src="./android-bridge.js"></script><script src="./bundle.js">');fs.writeFileSync(path.join(www,'index.html'),html,'utf8');
  const references=new Set(['src/core/store.cjs','src/core/harness.cjs','src/core/plugins.cjs','src/core/studio.cjs','src/core/knowledge.cjs','src/core/studio-service.cjs','src/core/role-card.cjs','android/src/cn/ohwhale/chat/MainActivity.java']);
  for(const file of references)copy(path.join(root,file),path.join(reference,file));

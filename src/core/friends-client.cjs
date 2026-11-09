@@ -34,6 +34,8 @@ Object.assign(ERRORS,{GROUPS_DISABLED:'群聊小站还没有开启，请稍后�
 ERRORS.FRIENDS_DISABLED='好友小站还在准备中，请等维护者开启后再来呀。';
 Object.assign(ERRORS,{MANAGED_DISABLED:'托管聊天还没有开启，可以先使用自己的 API 呀。',USER_RATE_LIMIT:'发得有点快啦，请稍等片刻再聊。',USER_DAILY_LIMIT:'今天的托管次数已用完，明天 UTC 零点恢复；也可以切换自己的 API。',GLOBAL_DAILY_LIMIT:'小站今天的共享额度用完啦，可以切换自己的 API。',CONCURRENT_LIMIT:'上一条回复还在路上，请等它完成或先取消。',BUDGET_LIMIT:'这段聊天超过今天的可用额度，请缩短内容或切换自己的 API。',MODEL_NOT_ALLOWED:'这位模型不在托管名单里，请重新选择或使用自己的 API。',UPSTREAM_ERROR:'模型伙伴暂时没回应，请稍后手动重试。',UPSTREAM_TIMEOUT:'模型伙伴等待太久啦，请稍后手动重试。',BODY_LIMIT:'内容有点多啦，请缩小图片或缩短上下文后再试。',CONTEXT_LIMIT:'这段上下文太长啦，请新建聊天或减少图片后再试。'});
 ERRORS.STORE_UNAVAILABLE='好友小站暂时没法保存资料，原有资料已保留，请稍后重试。';
+Object.assign(ERRORS,{UPSTREAM_FAILED:'这位模型伙伴暂时没接上话，请稍后手动重试；已写下的话都还在。',MODEL_DENIED:'这份聊天连接暂时不在小站菜单里，请重新选择。',GLOBAL_BUDGET_LIMIT:'小站今天的聊天预算已经用完，明天再来，或换用自己的连接。',TOKEN_BUDGET_LIMIT:'这段话超出了小站当前的聊天余量，请缩短内容或稍后再试。',IP_RATE_LIMIT:'这个网络下的聊天有点密，歇一小会儿再发吧。',QUOTA_UNAVAILABLE:'聊天余量暂时没能核对清楚，已经停止请求，请稍后再来。',TEXT_LIMIT:'这段聊天有点长啦，新开一个小房间，或缩短内容后再试。',IMAGE_LIMIT:'图片有点多或这位伙伴暂时看不了，请减少图片后再试。',BAD_IMAGE:'这张图片没有读完整，请换一张再试。',BAD_SCHEMA:'这次聊天资料没有准备完整，请重新打开聊天后再试。'});
+Object.assign(ERRORS,{UPSTREAM_HTTP:'聊天服务暂时没接通，请稍后手动重试。',UPSTREAM_INCOMPLETE:'这次回复没说完，请缩短问题后手动重试。',UPSTREAM_INVALID_RESPONSE:'伙伴的回复暂时没能读出来，请稍后手动重试。'});
 class FriendsClient{
  constructor({dir,serverUrl=defaults.signalingServerUrl,fetch:fetcher=globalThis.fetch,encrypt,decrypt}={}){
   if(typeof dir!=='string'||typeof fetcher!=='function'||typeof encrypt!=='function'||typeof decrypt!=='function')throw Error('好友服务尚未配置完整。');
