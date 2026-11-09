@@ -10,9 +10,14 @@
 - [Lucide](https://github.com/lucide-icons/lucide)：0.468.0，ISC；图标许可见其许可证副本。
 - [node-qrcode](https://github.com/soldair/node-qrcode)：1.5.4，MIT；用于本机生成好友二维码。
 - [jsQR](https://github.com/cozmo/jsQR)：1.4.0，Apache-2.0；用于本机识别二维码，图像不上传识别服务。
+- [three.js](https://github.com/mrdoob/three.js)：0.181.2，MIT；用于本机三维小屋、OrbitControls 视角控制和 GLTFLoader 模型读取。原始许可证逐字保存在 `licenses/three-0.181.2-LICENSE.txt`，版权为 three.js authors（2010–2025）。代码及所用附加模块随应用打包，不从 CDN 加载。
 - [Electron](https://github.com/electron/electron)：45.2.1，MIT，运行时所含 Chromium/Node 等另有相应许可证，随 Windows 文件夹保留。
 
 许可证原文复制在 `licenses/` 中；构建工具不随软件提供可执行接口。WebRTC来自Electron内置Chromium实现。本软件没有复制 Telegram 或 QQ 的专有界面代码。
+
+Windows 构建将许可证与本说明复制进应用资源；Android 构建将其复制到 APK 的 `assets/licenses/` 和 `assets/THIRD_PARTY_NOTICES.md`。最终发行包还需检查这些条目实际存在，源码中的复制逻辑不代替包内验收。
+
+1.6 默认三维小屋由本项目代码生成基础几何体，没有新增下载的第三方房屋图片、贴图或模型。用户导入的模型及其贴图由用户提供，three.js 的 MIT 许可不会转授这些素材的权利，也不会扩大下述原有图片的授权范围。
 
 ## 仅研究与借鉴，不代表已安装
 
