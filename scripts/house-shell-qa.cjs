@@ -1,4 +1,10 @@
 'use strict';
+// Historical 1.6 house-first acceptance remains available against a 1.6 build.
+// The default entry validates the current 1.7 chat-first application.
+if (!process.argv.includes('--legacy-house-shell-1.6')) {
+ require('./chat-layout-qa.cjs');
+} else {
+'use strict';
 // Actual renderer/preload/store/harness, fresh profile, loopback-only synthetic completion server.
 const fs=require('node:fs'),path=require('node:path'),http=require('node:http'),assert=require('node:assert/strict'),{_electron}=require('playwright');
 const root=path.resolve(__dirname,'..'),out=path.join(root,'artifacts','house-shell-qa-'+Date.now()),profile=path.join(out,'isolated-profile');fs.mkdirSync(out,{recursive:true});
@@ -20,3 +26,5 @@ async function main(){
  await page.setViewportSize({width:360,height:844});await page.getByTestId('mobile-nav-me').click();await page.getByTestId('me-view').waitFor({state:'visible'});await page.getByTestId('me-view').getByRole('button',{name:'用户协议',exact:true}).click();check('account agreement uses actual IPC',(await app.evaluate(()=>global.__openedHouseExternal)).length===3);await page.locator('.toast').waitFor({state:'hidden'});check('mobile account agreement has a full readable row',await page.getByTestId('me-view').locator('.agreement-note').evaluate(el=>el.getBoundingClientRect().width>=250));await page.screenshot({path:path.join(out,'07-account-agreement-360.png')});await page.getByTestId('me-settings').click();await page.getByRole('button',{name:'通用偏好',exact:true}).click();await page.getByTestId('display-name').waitFor();await page.getByRole('dialog').getByRole('button',{name:'用户协议',exact:true}).click();check('general settings agreement uses actual IPC',(await app.evaluate(()=>global.__openedHouseExternal)).length===4);check('360 general settings fits dialog',await page.evaluate(()=>{const el=document.querySelector('.modal');return el.scrollWidth<=el.clientWidth&&document.documentElement.scrollWidth<=innerWidth}));await page.screenshot({path:path.join(out,'08-general-settings-agreement-360.png')});await page.getByLabel('关闭对话框',{exact:true}).click();check('no renderer errors',errors.length===0);check('no friends registered after existing connection flow',!(await page.evaluate(()=>window.ly.friendsStatus())).enabled);const blocked=await app.evaluate(()=>global.__blockedHouseNetwork);fs.writeFileSync(path.join(out,'report.json'),JSON.stringify({passed:true,checks,errors,blockedNetwork:blocked,localModelRequests:requests.length,scope:'Fresh Electron profile and real App/preload/store/Harness; localhost completion fixture, managed catalog disabled fixture; mobile is responsive desktop, not Android hardware.'},null,2));console.log(JSON.stringify({out,checks:checks.length,errors,requests:requests.length}));
 }
 main().catch(async e=>{await page?.screenshot({path:path.join(out,'failure.png')}).catch(()=>{});fs.writeFileSync(path.join(out,'failure.txt'),e.stack);console.error(e);process.exitCode=1}).finally(async()=>{await app?.close().catch(()=>{});server?.close()});
+
+}

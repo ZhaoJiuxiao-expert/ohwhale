@@ -1,0 +1,52 @@
+/* 1.7: chat-first blue/white shell; focus is derived from the active workspace. */
+.app-shell{--accent:#167bdc;--border:#e0eaf5;background:linear-gradient(140deg,#f2f7ff,#fff 62%,#eef6ff);color:#243851}
+.global-toolbar{background:transparent}
+.workspace.group-hub-open .chat-layout,.workspace.group-hub-open>.profile-panel{display:none!important}
+.group-hub{flex:1;min-width:0;overflow:auto;padding:32px 40px 28px;background:linear-gradient(160deg,#fff,#f5f9ff);border:1px solid #e0eaf4;border-radius:18px;scrollbar-width:thin}
+.hub-heading{display:flex;justify-content:space-between;align-items:center;margin-bottom:28px;color:#246fc4}
+.hub-heading span{font-size:11px;letter-spacing:2px;color:#6b87a7}
+.hub-heading h1{font-size:30px;margin:8px 0;color:#243851;letter-spacing:1px}
+.hub-heading p,.hub-human p,.hub-section-heading p,.hub-room p{font-size:13px;color:#647991;line-height:1.8}
+.hub-human{display:flex;gap:22px;padding:27px;border-radius:20px;background:linear-gradient(120deg,#edf6ff,#f9fcff);border:1px solid #d8e9fb}
+.hub-human-icon{width:64px;height:64px;flex-shrink:0;border-radius:21px;display:grid;place-items:center;color:#1677cf;background:white;box-shadow:0 6px 22px #207dcc12}
+.hub-human h2,.hub-section-heading h2{font-size:19px;margin:0 0 7px;color:#25405e}
+.hub-human-actions{display:flex;gap:12px;flex-wrap:wrap;margin-top:20px}
+.hub-primary,.hub-secondary{display:flex;align-items:center;justify-content:center;gap:9px;border-radius:11px;padding:12px 18px;font-size:13px;min-height:44px}
+.hub-primary{color:white;background:#1680dc;box-shadow:0 5px 14px #2589da22}
+.hub-secondary{color:#35638e;background:#fff;border:1px solid #d5e5f5}
+.hub-section-heading{display:flex;gap:15px;align-items:center;justify-content:space-between;margin:34px 0 18px}
+.hub-section-heading p{margin:0}.hub-section-heading>button{display:flex;align-items:center;gap:5px;background:transparent;color:#1675c8;white-space:nowrap;font-size:13px;padding:10px}
+.hub-rooms{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
+.hub-room{text-align:left;background:white;border:1px solid #dde8f4;border-radius:20px;padding:23px 20px;transition:transform .18s,box-shadow .18s,border-color .18s;min-width:0;color:#25405e}
+.hub-room:hover{transform:translateY(-3px);border-color:#96c6f2;box-shadow:0 12px 26px #286da313}
+.hub-room-icon{display:grid;place-items:center;width:52px;height:52px;border-radius:17px;color:#237ad1;background:#eaf4ff;margin-bottom:20px}
+.hub-room>small{font-size:11px;color:#6b85a1}.hub-room h3{font-size:20px;margin:7px 0 9px}.hub-room p{min-height:45px;margin:0 0 20px}.hub-room-enter{display:flex;align-items:center;justify-content:space-between;font-size:13px;color:#1878ce}
+.hub-foot{display:flex;gap:8px;justify-content:center;margin-top:25px;color:#73869d;font-size:12px;line-height:1.8}
+.app-shell[data-chat-focus="true"] .desktop-personal,.app-shell[data-chat-focus="true"] .global-toolbar,.app-shell[data-chat-focus="true"] .mobile-brand-bar,.app-shell[data-chat-focus="true"] .workspace>.app-rail,.app-shell[data-chat-focus="true"] .room-route-strip{display:none!important}
+.app-shell[data-chat-focus="true"] .workspace{padding-bottom:0}
+.app-shell[data-chat-focus="true"][data-view="chat"] .chat-layout>.cs-sidebar{display:none!important}
+.app-shell[data-chat-focus="true"][data-view="chat"] .chat-layout>.cs-chat-container{display:flex!important;min-width:0;width:100%;flex:1}
+.app-shell[data-chat-focus="true"] .cs-conversation-header__actions .mobile-back{display:flex;position:static;width:36px;height:36px}
+.app-shell .cs-conversation-header__actions:first-child:has(.mobile-back){display:flex}
+.app-shell[data-chat-focus="true"] .chat-layout,.app-shell[data-chat-focus="true"] .rooms-host,.app-shell[data-chat-focus="true"] .groups-host{border-radius:14px;min-width:0}
+.app-shell[data-chat-focus="true"] .profile-panel{position:absolute;inset:0 0 0 auto;z-index:25;width:min(340px,100%);background:#fff;box-shadow:-15px 0 45px #254b6e20;overflow:auto}
+.app-shell .room-route-strip{background:#f4f9ff;border-color:#dce8f5;color:#52718f;min-height:38px;flex-shrink:0}
+.app-shell .room-route-strip button{color:#216fb4;padding:8px 10px}
+.chat-focus-toggle{color:#3883c3}
+@media(min-width:821px){
+ .desktop-personal{width:84px;padding:13px 9px 8px 3px;align-items:center;gap:15px}
+ .desktop-personal .personal-identity{padding:0;justify-content:center}.desktop-personal .personal-identity>span,.desktop-personal .personal-identity>svg,.personal-notifications,.desktop-personal .personal-bottom>span:not(.self-avatar),.desktop-personal .personal-shortcuts span{display:none}
+ .desktop-primary-nav{flex-direction:column;gap:9px;width:100%;padding:0}.desktop-primary-nav>button{flex-direction:column;width:60px;min-height:58px;padding:9px 6px;gap:6px;flex:none}.desktop-primary-nav>button svg{width:21px;height:21px}
+ .desktop-personal .personal-shortcuts{flex-direction:column;gap:8px;margin-top:auto}.desktop-personal .personal-shortcuts>button{padding:11px}.desktop-personal .personal-bottom{padding:10px 0;gap:5px}.desktop-personal .personal-bottom>.self-avatar{display:none}
+ .global-toolbar{margin-left:84px}.app-shell[data-chat-focus="true"] .window-strip{height:32px;min-height:32px}
+}
+@media(max-width:820px){
+ .group-hub{border:0;border-radius:0;padding:17px 18px 25px}.hub-heading{margin-bottom:18px}.hub-heading h1{font-size:26px}.hub-heading>svg{width:30px}.hub-heading p{font-size:12px;max-width:245px}
+ .hub-human{padding:20px;gap:14px;flex-direction:column}.hub-human-icon{width:46px;height:46px;border-radius:15px}.hub-human-icon svg{width:24px}.hub-human h2,.hub-section-heading h2{font-size:17px}.hub-human-actions{gap:8px;margin-top:16px}.hub-primary,.hub-secondary{flex:1;white-space:nowrap;padding:11px;font-size:12px}
+ .hub-section-heading{margin-top:27px;align-items:flex-start}.hub-section-heading p{font-size:12px}.hub-section-heading>button{font-size:12px;padding:4px 0}
+ .hub-rooms{grid-template-columns:1fr;gap:11px}.hub-room{padding:17px 18px;display:grid;grid-template-columns:51px 1fr;column-gap:15px;border-radius:16px}.hub-room-icon{grid-row:1/5;width:47px;height:47px;margin:0}.hub-room>small,.hub-room h3,.hub-room p,.hub-room-enter{grid-column:2}.hub-room h3{font-size:18px;margin:4px 0}.hub-room p{min-height:0;margin-bottom:9px;font-size:12px}.hub-foot{font-size:11px;text-align:center}
+ .app-shell[data-chat-focus="true"] .workspace{padding:0}.app-shell[data-chat-focus="true"] .chat-layout,.app-shell[data-chat-focus="true"] .rooms-host,.app-shell[data-chat-focus="true"] .groups-host{border:0;border-radius:0}
+ .app-shell[data-chat-focus="true"] .cs-conversation-header__actions .mobile-back{position:absolute;left:5px;top:18px;width:31px;height:34px}
+ .chat-focus-toggle{display:none!important}.app-shell[data-chat-focus="true"] .composer-area{padding-bottom:max(12px,env(safe-area-inset-bottom))}
+}
+@media(prefers-reduced-motion:reduce){.hub-room{transition:none}.hub-room:hover{transform:none}}
